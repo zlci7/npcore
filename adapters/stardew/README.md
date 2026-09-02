@@ -50,7 +50,13 @@ The script's `-GamePath` argument controls the install target and the project fi
 
 ## Manual Smoke Test
 
-1. Start Runtime with `go run ./runtime/cmd/server`.
+1. Start Runtime from the repository root:
+
+   ```powershell
+   $env:GAMEAGENT_AGENT_CONFIG="runtime/config/games/stardew-valley/agent.json"
+   go run ./runtime/cmd/server
+   ```
+
 2. Build and install the adapter.
 3. Launch Stardew Valley through `StardewModdingAPI.exe`.
 4. Load a save where at least one villager NPC is reachable.

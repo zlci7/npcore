@@ -64,6 +64,7 @@ Start the Runtime:
 ```powershell
 cd world-is-agent
 $env:DEEPSEEK_API_KEY="..."
+$env:GAMEAGENT_AGENT_CONFIG="runtime/config/games/stardew-valley/agent.json"
 go run ./runtime/cmd/server
 ```
 
@@ -85,6 +86,8 @@ For the full Stardew flow, see [adapters/stardew/README.md](adapters/stardew/REA
 - `runtime/config/model.json` configures provider, model, base URL, and API key environment references.
 - `GAMEAGENT_MODEL_CONFIG` overrides the model config path.
 - `runtime/config/agent.json` configures turn timeout, model timeout, memory limits, and tool budgets.
+- `runtime/config/games/stardew-valley/agent.json` enables the Stardew runtime profile and static definition catalog.
+- `GAMEAGENT_AGENT_CONFIG` overrides the agent config path.
 
 Use environment variable references such as `env:DEEPSEEK_API_KEY` for real API keys.
 
