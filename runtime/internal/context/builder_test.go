@@ -79,6 +79,33 @@ func TestBuilderDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
 	}
 }
 
+func TestBuilderUsesInputSessionKeyAsDescriptorScope(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"}
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey: key,
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey:   session.AgentSessionKey{GameID: "other-game", WorldID: "world-b", EntityID: "creature:beta"},
+			EntityType:   "creature",
+			DisplayName:  "Alpha",
+			DefinitionID: "villager/farmer",
+		},
+		Event:       &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
+		Observation: &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if agentCtx.AgentDescriptor.SessionKey != key {
+		t.Fatalf("AgentDescriptor.SessionKey = %+v, want %+v", agentCtx.AgentDescriptor.SessionKey, key)
+	}
+	if agentCtx.AgentDescriptor.DefinitionID != "villager/farmer" {
+		t.Fatalf("AgentDescriptor.DefinitionID = %q, want villager/farmer", agentCtx.AgentDescriptor.DefinitionID)
+	}
+}
+
 func TestBuilderUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})

@@ -309,6 +309,88 @@ func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *t
 	)
 }
 
+func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "done"},
+			},
+		},
+	}
+	catalog, err := definition.NewCatalog(
+		[]definition.GameDefinition{{
+			SchemaVersion: definition.SchemaVersionV1Alpha1,
+			GameID:        "fake-game",
+			Title:         "Fake Game",
+		}},
+		[]definition.AgentDefinition{{
+			SchemaVersion: definition.SchemaVersionV1Alpha1,
+			GameID:        "fake-game",
+			DefinitionID:  "villager/farmer",
+			Identity:      "A reusable farmer archetype.",
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewCatalog returned error: %v", err)
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	alphaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:alpha", EntityID: "creature:alpha"}
+	betaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:beta", EntityID: "creature:beta"}
+	alphaTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     alphaKey.EntityID,
+		EntityType:   "creature",
+		DisplayName:  "Alpha",
+		DefinitionId: "villager/farmer",
+	}
+	betaTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     betaKey.EntityID,
+		EntityType:   "creature",
+		DisplayName:  "Beta",
+		DefinitionId: "villager/farmer",
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, gameEvent("event_alpha", alphaKey), alphaTarget); err != nil {
+		t.Fatalf("alpha HandleEvent returned error: %v", err)
+	}
+	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, gameEvent("event_beta", betaKey), betaTarget); err != nil {
+		t.Fatalf("beta HandleEvent returned error: %v", err)
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(provider.requests))
+	}
+	alphaContent := provider.requests[0].Messages[0].Content
+	betaContent := provider.requests[1].Messages[0].Content
+	assertRequestContentContains(t, alphaContent,
+		"identity: A reusable farmer archetype.",
+		"world_id: world:alpha",
+		"entity_id: creature:alpha",
+		"display_name: Alpha",
+		"definition_id: villager/farmer",
+	)
+	assertRequestContentContains(t, betaContent,
+		"identity: A reusable farmer archetype.",
+		"world_id: world:beta",
+		"entity_id: creature:beta",
+		"display_name: Beta",
+		"definition_id: villager/farmer",
+	)
+	for _, unwanted := range []string{"world:beta", "creature:beta", "display_name: Beta"} {
+		if strings.Contains(alphaContent, unwanted) {
+			t.Fatalf("alpha request should not contain beta scope %q:\n%s", unwanted, alphaContent)
+		}
+	}
+	for _, unwanted := range []string{"world:alpha", "creature:alpha", "display_name: Alpha"} {
+		if strings.Contains(betaContent, unwanted) {
+			t.Fatalf("beta request should not contain alpha scope %q:\n%s", unwanted, betaContent)
+		}
+	}
+}
+
 func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}

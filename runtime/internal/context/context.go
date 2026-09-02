@@ -72,15 +72,7 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 	}
 
 	descriptor := input.AgentDescriptor
-	if descriptor.SessionKey.GameID == "" {
-		descriptor.SessionKey.GameID = input.SessionKey.GameID
-	}
-	if descriptor.SessionKey.WorldID == "" {
-		descriptor.SessionKey.WorldID = input.SessionKey.WorldID
-	}
-	if descriptor.SessionKey.EntityID == "" {
-		descriptor.SessionKey.EntityID = input.SessionKey.EntityID
-	}
+	descriptor.SessionKey = input.SessionKey
 
 	return AgentContext{
 		SessionKey:      input.SessionKey,
