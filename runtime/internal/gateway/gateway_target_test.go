@@ -60,6 +60,21 @@ func TestResolveAgentTargetRejectsMissingTargetEntity(t *testing.T) {
 	}
 }
 
+func TestResolveAgentTargetComparesEntityIDCaseSensitively(t *testing.T) {
+	event := targetResolutionEvent("npc:Abigail")
+	event.Entities = []*protocolv1alpha2.EntityRef{
+		{EntityId: "NPC:Abigail", EntityType: "npc", DisplayName: "Abigail", DefinitionId: "npc:Abigail"},
+	}
+
+	_, ackErr := resolveAgentTarget(agent.ConnectionContext{GameID: "stardew-valley"}, event)
+	if ackErr == nil {
+		t.Fatal("resolveAgentTarget returned nil error, want target_entity_not_in_event")
+	}
+	if ackErr.Code != "target_entity_not_in_event" {
+		t.Fatalf("error code = %q, want target_entity_not_in_event", ackErr.Code)
+	}
+}
+
 func TestResolveAgentTargetRejectsDuplicateTargetEntityConflicts(t *testing.T) {
 	tests := []struct {
 		name     string

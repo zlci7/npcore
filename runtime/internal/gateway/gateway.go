@@ -295,9 +295,10 @@ func logSafeError(err error) string {
 	return strings.TrimSpace(string(runes[:240]))
 }
 
-// resolveAgentSessionKey 完成 pre-turn 校验与身份解析，被 dispatchGameEvent
-// Step 2 调用。失败返回 REJECTED 用的 *protocolv1alpha2.Error（pre-turn rejected，
-// 不创建 lane、不创建 turn trace）。
+// resolveAgentSessionKey 保留 key-only 视图；pre-turn admission 使用
+// resolveAgentTarget 同时获得 AgentSessionKey 和 canonical Target EntityRef。
+// 失败返回 REJECTED 用的 *protocolv1alpha2.Error（pre-turn rejected，不创建
+// lane、不创建 turn trace）。
 //
 //	校验 1  event_type 必须非空，但不做 game-specific allowlist
 //	校验 2  target_entity_id 必须显式声明，不能靠列表顺序/类型猜

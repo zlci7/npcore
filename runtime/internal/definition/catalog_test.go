@@ -62,6 +62,12 @@ func TestNewCatalogFindsScopedDefinitionsWithTrimmedKeys(t *testing.T) {
 	if len(agent.BehaviorGuidelines) != 1 || agent.BehaviorGuidelines[0] != "Respond briefly." {
 		t.Fatalf("BehaviorGuidelines = %+v", agent.BehaviorGuidelines)
 	}
+	if _, ok := catalog.FindGame("Stardew-Valley"); ok {
+		t.Fatal("FindGame should compare game_id case-sensitively")
+	}
+	if _, ok := catalog.FindAgent("stardew-valley", "NPC:Abigail"); ok {
+		t.Fatal("FindAgent should compare definition_id case-sensitively")
+	}
 }
 
 func TestNewCatalogRejectsDuplicateGameID(t *testing.T) {
@@ -290,6 +296,48 @@ func TestLoadCatalogFromDirRejectsPathScopeMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "scope mismatch") {
 		t.Fatalf("error = %v, want scope mismatch", err)
+	}
+}
+
+func TestLoadCatalogFromDirRejectsInvalidAgentFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "malformed json",
+			content: `{`,
+			want:    "parse agent definition",
+		},
+		{
+			name: "scope mismatch",
+			content: `{
+  "schema_version": "v1alpha1",
+  "game_id": "other-game",
+  "definition_id": "npc:Abigail"
+}`,
+			want: "scope mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "game.json"), `{
+  "schema_version": "v1alpha1",
+  "game_id": "stardew-valley"
+}`)
+			writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "agents", "abigail.json"), tt.content)
+
+			_, err := definition.LoadCatalogFromDir(root)
+			if err == nil {
+				t.Fatal("LoadCatalogFromDir returned nil error, want agent file validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
