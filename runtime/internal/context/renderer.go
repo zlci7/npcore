@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 
@@ -292,6 +293,12 @@ func (r Renderer) renderUserMessage(agentContext AgentContext) string {
 	return fmt.Sprintf(`[Recent Memory]
 %s
 
+[Game Definition]
+%s
+
+[Agent Definition]
+%s
+
 [Agent Descriptor]
 %s
 
@@ -310,18 +317,94 @@ If Recent Memory is from today and current game time has not clearly advanced mu
 Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.
 `,
 		r.renderMemories(agentContext.RecentMemories, currentGameTime(agentContext)),
+		renderGameDefinition(agentContext.GameDefinition),
+		renderAgentDefinition(agentContext.AgentDefinition),
 		renderAgentDescriptor(agentContext.AgentDescriptor),
 		protoToJSON(agentContext.Event),
 		protoToJSON(agentContext.Observation),
 	)
 }
 
-func renderAgentDescriptor(descriptor AgentDescriptor) string {
+func renderGameDefinition(game *definition.GameDefinition) string {
+	if game == nil {
+		return "(none)"
+	}
+	lines := make([]string, 0)
+	appendLine(&lines, "title", game.Title)
+	appendLine(&lines, "summary", game.Summary)
+	appendList(&lines, "world_rules", game.WorldRules)
+	appendList(&lines, "lore", game.Lore)
+	appendList(&lines, "narrative_constraints", game.NarrativeConstraints)
+	if len(lines) == 0 {
+		return "(empty)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderAgentDefinition(agent *definition.AgentDefinition) string {
+	if agent == nil {
+		return "(none)"
+	}
+	lines := make([]string, 0)
+	appendLine(&lines, "identity", agent.Identity)
+	appendList(&lines, "personality", agent.Personality)
+	appendList(&lines, "speech_style", agent.SpeechStyle)
+	appendList(&lines, "preferences", agent.Preferences)
+	appendList(&lines, "behavior_guidelines", agent.BehaviorGuidelines)
+	if len(lines) == 0 {
+		return "(empty)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func appendLine(lines *[]string, label string, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	*lines = append(*lines, fmt.Sprintf("%s: %s", label, value))
+}
+
+func appendList(lines *[]string, label string, values []string) {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		items = append(items, value)
+	}
+	if len(items) == 0 {
+		return
+	}
+	*lines = append(*lines, label+":")
+	for _, item := range items {
+		*lines = append(*lines, "- "+item)
+	}
+}
+
+func renderAgentDescriptor(descriptor definition.AgentInstanceDescriptor) string {
 	definitionID := strings.TrimSpace(descriptor.DefinitionID)
 	if definitionID == "" {
 		definitionID = "(unspecified)"
 	}
-	return fmt.Sprintf("entity_id: %s\ndefinition_id: %s", descriptor.EntityID, definitionID)
+	return fmt.Sprintf(
+		"game_id: %s\nworld_id: %s\nentity_id: %s\nentity_type: %s\ndisplay_name: %s\ndefinition_id: %s",
+		descriptor.SessionKey.GameID,
+		descriptor.SessionKey.WorldID,
+		descriptor.SessionKey.EntityID,
+		emptyLabel(descriptor.EntityType),
+		emptyLabel(descriptor.DisplayName),
+		definitionID,
+	)
+}
+
+func emptyLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "(unspecified)"
+	}
+	return value
 }
 
 // renderMemories 渲染 Recent Memory section。

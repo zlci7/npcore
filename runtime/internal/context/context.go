@@ -3,9 +3,9 @@ package context
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
@@ -13,15 +13,12 @@ import (
 
 var ErrInvalidInput = errors.New("invalid agent context input")
 
-type AgentDescriptor struct {
-	EntityID     string
-	DefinitionID string
-}
-
 type AgentContext struct {
 	SessionKey session.AgentSessionKey
 
-	AgentDescriptor AgentDescriptor
+	AgentDescriptor definition.AgentInstanceDescriptor
+	GameDefinition  *definition.GameDefinition
+	AgentDefinition *definition.AgentDefinition
 
 	RuntimePolicy string
 
@@ -36,7 +33,10 @@ type AgentContext struct {
 }
 
 type BuildInput struct {
-	SessionKey session.AgentSessionKey
+	SessionKey      session.AgentSessionKey
+	AgentDescriptor definition.AgentInstanceDescriptor
+	GameDefinition  *definition.GameDefinition
+	AgentDefinition *definition.AgentDefinition
 
 	RuntimePolicy string
 
@@ -71,19 +71,52 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 		return AgentContext{}, fmt.Errorf("%w: session key is required", ErrInvalidInput)
 	}
 
+	descriptor := input.AgentDescriptor
+	if descriptor.SessionKey.GameID == "" {
+		descriptor.SessionKey.GameID = input.SessionKey.GameID
+	}
+	if descriptor.SessionKey.WorldID == "" {
+		descriptor.SessionKey.WorldID = input.SessionKey.WorldID
+	}
+	if descriptor.SessionKey.EntityID == "" {
+		descriptor.SessionKey.EntityID = input.SessionKey.EntityID
+	}
+
 	return AgentContext{
-		SessionKey: input.SessionKey,
-		AgentDescriptor: AgentDescriptor{
-			EntityID:     input.SessionKey.EntityID,
-			DefinitionID: definitionIDFromTargetEntity(input.Event),
-		},
-		RuntimePolicy:  input.RuntimePolicy,
-		RecentMemories: append([]memory.Record(nil), input.RecentMemories...),
-		Event:          input.Event,
-		Observation:    input.Observation,
-		Tools:          append([]model.ToolDefinition(nil), input.Tools...),
-		Transcript:     copyMessages(input.Transcript),
+		SessionKey:      input.SessionKey,
+		AgentDescriptor: descriptor,
+		GameDefinition:  copyGameDefinition(input.GameDefinition),
+		AgentDefinition: copyAgentDefinition(input.AgentDefinition),
+		RuntimePolicy:   input.RuntimePolicy,
+		RecentMemories:  append([]memory.Record(nil), input.RecentMemories...),
+		Event:           input.Event,
+		Observation:     input.Observation,
+		Tools:           append([]model.ToolDefinition(nil), input.Tools...),
+		Transcript:      copyMessages(input.Transcript),
 	}, nil
+}
+
+func copyGameDefinition(game *definition.GameDefinition) *definition.GameDefinition {
+	if game == nil {
+		return nil
+	}
+	out := *game
+	out.WorldRules = append([]string(nil), game.WorldRules...)
+	out.Lore = append([]string(nil), game.Lore...)
+	out.NarrativeConstraints = append([]string(nil), game.NarrativeConstraints...)
+	return &out
+}
+
+func copyAgentDefinition(agent *definition.AgentDefinition) *definition.AgentDefinition {
+	if agent == nil {
+		return nil
+	}
+	out := *agent
+	out.Personality = append([]string(nil), agent.Personality...)
+	out.SpeechStyle = append([]string(nil), agent.SpeechStyle...)
+	out.Preferences = append([]string(nil), agent.Preferences...)
+	out.BehaviorGuidelines = append([]string(nil), agent.BehaviorGuidelines...)
+	return &out
 }
 
 func copyMessages(messages []model.Message) []model.Message {
@@ -136,26 +169,4 @@ func copyMap(values map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
-}
-
-func definitionIDFromTargetEntity(event *protocolv1alpha2.GameEvent) string {
-	if event == nil {
-		return ""
-	}
-	targetEntityID := strings.TrimSpace(event.GetTargetEntityId())
-	if targetEntityID == "" {
-		return ""
-	}
-
-	for _, entity := range event.GetEntities() {
-		if entity == nil {
-			continue
-		}
-		if strings.TrimSpace(entity.GetEntityId()) != targetEntityID {
-			continue
-		}
-		return strings.TrimSpace(entity.GetDefinitionId())
-	}
-
-	return ""
 }

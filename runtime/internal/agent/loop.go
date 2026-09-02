@@ -8,6 +8,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	agentcontext "gameagent/runtime/internal/context"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/idgen"
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
@@ -42,6 +43,7 @@ type Loop struct {
 
 	memoryStore     memory.Store
 	memoryProjector memoryProjector
+	definitions     definition.Catalog
 	contextBuilder  agentcontext.Builder
 	contextRenderer agentcontext.Renderer
 }
@@ -84,6 +86,12 @@ func WithMemoryProjector(projector interface {
 			return
 		}
 		loop.memoryProjector = projector
+	}
+}
+
+func WithDefinitionCatalog(catalog definition.Catalog) LoopOption {
+	return func(loop *Loop) {
+		loop.definitions = catalog
 	}
 }
 
@@ -178,14 +186,25 @@ func (l *Loop) HandleEvent(
 	}
 	turnTracer.Emit(trace.EventObservationReceived, trace.EventData{})
 
+	descriptor := definition.NewAgentInstanceDescriptor(key, firstTarget(target))
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
-	return l.runBoundedSteps(ctx, env, key, event, obs, recentMemories, turnID, turnTracer)
+	return l.runBoundedSteps(ctx, env, key, descriptor, event, obs, recentMemories, turnID, turnTracer)
+}
+
+func firstTarget(targets []*protocolv1alpha2.EntityRef) *protocolv1alpha2.EntityRef {
+	for _, target := range targets {
+		if target != nil {
+			return target
+		}
+	}
+	return nil
 }
 
 func (l *Loop) runBoundedSteps(
 	ctx context.Context,
 	env Environment,
 	key session.AgentSessionKey,
+	descriptor definition.AgentInstanceDescriptor,
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
@@ -203,7 +222,7 @@ func (l *Loop) runBoundedSteps(
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
 
-		req, err := l.buildModelRequest(key, event, obs, recentMemories, transcript)
+		req, err := l.buildModelRequest(key, descriptor, event, obs, recentMemories, transcript)
 		if err != nil {
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": contextFailureReason(err)},
@@ -527,19 +546,24 @@ func turnCompletionError(reason string, err error) *protocolv1alpha2.Error {
 
 func (l *Loop) buildModelRequest(
 	key session.AgentSessionKey,
+	descriptor definition.AgentInstanceDescriptor,
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
 	transcript []model.Message,
 ) (model.Request, error) {
+	gameDefinition, agentDefinition := l.resolveDefinitions(key, descriptor)
 	agentCtx, err := l.contextBuilder.Build(agentcontext.BuildInput{
-		SessionKey:     key,
-		RuntimePolicy:  BuildSystemPrompt(l.config.Prompt),
-		Event:          event,
-		Observation:    obs,
-		RecentMemories: recentMemories,
-		Tools:          l.tools.Available(),
-		Transcript:     transcript,
+		SessionKey:      key,
+		AgentDescriptor: descriptor,
+		GameDefinition:  gameDefinition,
+		AgentDefinition: agentDefinition,
+		RuntimePolicy:   BuildSystemPrompt(l.config.Prompt),
+		Event:           event,
+		Observation:     obs,
+		RecentMemories:  recentMemories,
+		Tools:           l.tools.Available(),
+		Transcript:      transcript,
 	})
 	if err != nil {
 		return model.Request{}, err
@@ -550,6 +574,21 @@ func (l *Loop) buildModelRequest(
 		return model.Request{}, err
 	}
 	return req, nil
+}
+
+func (l *Loop) resolveDefinitions(key session.AgentSessionKey, descriptor definition.AgentInstanceDescriptor) (*definition.GameDefinition, *definition.AgentDefinition) {
+	var gameDefinition *definition.GameDefinition
+	if game, ok := l.definitions.FindGame(key.GameID); ok {
+		gameDefinition = &game
+	}
+
+	var agentDefinition *definition.AgentDefinition
+	if descriptor.DefinitionID != "" {
+		if agent, ok := l.definitions.FindAgent(key.GameID, descriptor.DefinitionID); ok {
+			agentDefinition = &agent
+		}
+	}
+	return gameDefinition, agentDefinition
 }
 
 func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int, event *protocolv1alpha2.GameEvent, turnID string, asyncActionLimitFull bool) toolBatchScheduler {

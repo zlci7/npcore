@@ -8,6 +8,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	agentcontext "gameagent/runtime/internal/context"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
@@ -15,11 +16,18 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestBuilderExtractsDefinitionIDFromTargetEntityRef(t *testing.T) {
+func TestBuilderUsesInjectedDescriptorInsteadOfScanningEventEntities(t *testing.T) {
 	builder := agentcontext.NewBuilder()
+	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"}
 
 	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		SessionKey: key,
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey:   key,
+			EntityType:   "creature",
+			DisplayName:  "Alpha",
+			DefinitionID: "villager/farmer",
+		},
 		Event: &protocolv1alpha2.GameEvent{
 			EventId:        "event-1",
 			WorldId:        "world-a",
@@ -35,8 +43,8 @@ func TestBuilderExtractsDefinitionIDFromTargetEntityRef(t *testing.T) {
 		t.Fatalf("Build returned error: %v", err)
 	}
 
-	if agentCtx.AgentDescriptor.EntityID != "creature:alpha" {
-		t.Fatalf("AgentDescriptor.EntityID = %q, want creature:alpha", agentCtx.AgentDescriptor.EntityID)
+	if agentCtx.AgentDescriptor.SessionKey.EntityID != "creature:alpha" {
+		t.Fatalf("AgentDescriptor entity_id = %q, want creature:alpha", agentCtx.AgentDescriptor.SessionKey.EntityID)
 	}
 	if agentCtx.AgentDescriptor.DefinitionID != "villager/farmer" {
 		t.Fatalf("AgentDescriptor.DefinitionID = %q, want villager/farmer", agentCtx.AgentDescriptor.DefinitionID)
@@ -71,6 +79,117 @@ func TestBuilderDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
 	}
 }
 
+func TestBuilderUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	descriptor := definition.AgentInstanceDescriptor{
+		SessionKey:   session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		EntityType:   "creature",
+		DisplayName:  "Alpha",
+		DefinitionID: "villager/farmer",
+	}
+	gameDefinition := definition.GameDefinition{
+		SchemaVersion:        definition.SchemaVersionV1Alpha1,
+		GameID:               "fake-game",
+		Title:                "Fake Game",
+		Summary:              "A test world.",
+		WorldRules:           []string{"Time advances in turns."},
+		Lore:                 []string{"Creatures live near the farm."},
+		NarrativeConstraints: []string{"Stay grounded in observed facts."},
+	}
+	agentDefinition := definition.AgentDefinition{
+		SchemaVersion:      definition.SchemaVersionV1Alpha1,
+		GameID:             "fake-game",
+		DefinitionID:       "villager/farmer",
+		Identity:           "A farmer archetype.",
+		Personality:        []string{"patient"},
+		SpeechStyle:        []string{"plain"},
+		Preferences:        []string{"fresh seeds"},
+		BehaviorGuidelines: []string{"Answer as the current creature instance."},
+	}
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:      descriptor.SessionKey,
+		AgentDescriptor: descriptor,
+		GameDefinition:  &gameDefinition,
+		AgentDefinition: &agentDefinition,
+		RuntimePolicy:   "policy",
+		Event:           &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
+		Observation:     &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "creature:alpha"},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if agentCtx.AgentDescriptor.SessionKey.EntityID != "creature:alpha" {
+		t.Fatalf("descriptor entity_id = %q, want creature:alpha", agentCtx.AgentDescriptor.SessionKey.EntityID)
+	}
+	if agentCtx.AgentDescriptor.DefinitionID != "villager/farmer" {
+		t.Fatalf("descriptor definition_id = %q, want villager/farmer", agentCtx.AgentDescriptor.DefinitionID)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	assertContainsAll(
+		t,
+		req.Messages[0].Content,
+		"[Game Definition]",
+		"title: Fake Game",
+		"summary: A test world.",
+		"- Time advances in turns.",
+		"[Agent Definition]",
+		"identity: A farmer archetype.",
+		"- Answer as the current creature instance.",
+		"[Agent Descriptor]",
+		"game_id: fake-game",
+		"world_id: world-a",
+		"entity_id: creature:alpha",
+		"entity_type: creature",
+		"display_name: Alpha",
+		"definition_id: villager/farmer",
+	)
+}
+
+func TestRendererOmitsFabricatedDefinitionsWhenFallbackIsUsed(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey:  session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+			EntityType:  "creature",
+			DisplayName: "Alpha",
+		},
+		RuntimePolicy: "policy with fallback npc style",
+		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
+		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "creature:alpha"},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	content := req.Messages[0].Content
+	assertContainsAll(t, content, "[Game Definition]\n(none)", "[Agent Definition]\n(none)", "definition_id: (unspecified)")
+	for _, unwanted := range []string{
+		"identity:",
+		"personality:",
+		"speech_style:",
+		"preferences:",
+		"behavior_guidelines:",
+	} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("fallback render should not fabricate %q:\n%s", unwanted, content)
+		}
+	}
+}
+
 func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
@@ -79,7 +198,11 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 	tool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
 
 	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey:   session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+			DefinitionID: "npc:Abigail",
+		},
 		RuntimePolicy: "You are controlling an NPC in a game.",
 		Event: &protocolv1alpha2.GameEvent{
 			EventId:        "event-1",

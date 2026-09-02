@@ -1,6 +1,11 @@
 package definition
 
-import "gameagent/runtime/internal/session"
+import (
+	"strings"
+
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/session"
+)
 
 const SchemaVersionV1Alpha1 = "v1alpha1"
 
@@ -32,4 +37,15 @@ type AgentInstanceDescriptor struct {
 	EntityType   string
 	DisplayName  string
 	DefinitionID string
+}
+
+func NewAgentInstanceDescriptor(key session.AgentSessionKey, target *protocolv1alpha2.EntityRef) AgentInstanceDescriptor {
+	descriptor := AgentInstanceDescriptor{SessionKey: key}
+	if target == nil {
+		return descriptor
+	}
+	descriptor.EntityType = strings.TrimSpace(target.GetEntityType())
+	descriptor.DisplayName = strings.TrimSpace(target.GetDisplayName())
+	descriptor.DefinitionID = strings.TrimSpace(target.GetDefinitionId())
+	return descriptor
 }

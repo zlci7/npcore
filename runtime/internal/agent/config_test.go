@@ -31,6 +31,7 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
   "max_tool_result_output_depth": 3,
   "max_tool_result_output_fields": 16,
   "max_tool_result_output_array_items": 8,
+  "definition_catalog_root": "runtime/config/games",
   "prompt": {
     "language": "Simplified Chinese",
     "npc_style": "quiet mountain hermit",
@@ -103,6 +104,9 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 	}
 	if cfg.MaxToolResultOutputArrayItems != 8 {
 		t.Fatalf("expected max tool result output array items 8, got %d", cfg.MaxToolResultOutputArrayItems)
+	}
+	if cfg.DefinitionCatalogRoot != "runtime/config/games" {
+		t.Fatalf("expected definition catalog root from config, got %q", cfg.DefinitionCatalogRoot)
 	}
 }
 

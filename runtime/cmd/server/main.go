@@ -10,6 +10,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/gateway"
 	"gameagent/runtime/internal/llm"
 	"gameagent/runtime/internal/tool"
@@ -51,7 +52,17 @@ func main() {
 		agentConfig.ObserveTimeout,
 		agentConfig.ActionTimeout,
 	)
-	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder, agentConfig)
+
+	var definitionCatalog definition.Catalog
+	if agentConfig.DefinitionCatalogRoot != "" {
+		definitionCatalog, err = definition.LoadCatalogFromDir(agentConfig.DefinitionCatalogRoot)
+		if err != nil {
+			log.Fatalf("load definition catalog failed: %v", err)
+		}
+		log.Printf("GameAgent definition catalog root: %s", agentConfig.DefinitionCatalogRoot)
+	}
+
+	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder, agentConfig, agent.WithDefinitionCatalog(definitionCatalog))
 
 	gatewayServer := gateway.NewServer(agentLoop, toolRegistry)
 

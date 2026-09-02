@@ -11,6 +11,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
+	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
@@ -241,6 +242,71 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 
 	assertTraceContains(t, recorder.events, trace.EventContextLoaded)
 	assertTraceContains(t, recorder.events, trace.EventContextUpdated)
+}
+
+func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "done"},
+			},
+		},
+	}
+	catalog, err := definition.NewCatalog(
+		[]definition.GameDefinition{{
+			SchemaVersion: definition.SchemaVersionV1Alpha1,
+			GameID:        "fake-game",
+			Title:         "Fake Game",
+			Summary:       "A scoped fake world.",
+		}},
+		[]definition.AgentDefinition{{
+			SchemaVersion:      definition.SchemaVersionV1Alpha1,
+			GameID:             "fake-game",
+			DefinitionID:       "villager/farmer",
+			Identity:           "A reusable farmer archetype.",
+			BehaviorGuidelines: []string{"Use the current instance descriptor."},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewCatalog returned error: %v", err)
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
+	event := gameEvent("event_1", key)
+	target := &protocolv1alpha2.EntityRef{
+		EntityId:     "creature:alpha",
+		EntityType:   "creature",
+		DisplayName:  "Alpha",
+		DefinitionId: "villager/farmer",
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, event, target); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(provider.requests))
+	}
+	content := provider.requests[0].Messages[0].Content
+	assertRequestContentContains(t, content,
+		"[Game Definition]",
+		"title: Fake Game",
+		"summary: A scoped fake world.",
+		"[Agent Definition]",
+		"identity: A reusable farmer archetype.",
+		"- Use the current instance descriptor.",
+		"[Agent Descriptor]",
+		"game_id: fake-game",
+		"world_id: world:test",
+		"entity_id: creature:alpha",
+		"entity_type: creature",
+		"display_name: Alpha",
+		"definition_id: villager/farmer",
+	)
 }
 
 func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
@@ -484,6 +550,16 @@ func requestMessagesContain(messages []model.Message, needle string) bool {
 		}
 	}
 	return false
+}
+
+func assertRequestContentContains(t *testing.T, content string, values ...string) {
+	t.Helper()
+
+	for _, want := range values {
+		if !strings.Contains(content, want) {
+			t.Fatalf("request content missing %q:\n%s", want, content)
+		}
+	}
 }
 
 func newSpeakRegistry() *tool.Registry {

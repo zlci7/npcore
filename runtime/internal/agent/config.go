@@ -34,6 +34,7 @@ type Config struct {
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
 	MaxToolResultOutputArrayItems int
+	DefinitionCatalogRoot         string
 	Prompt                        PromptConfig
 }
 
@@ -56,6 +57,7 @@ type fileConfig struct {
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
 	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
 	MaxToolResultOutputArrayItems int          `json:"max_tool_result_output_array_items"`
+	DefinitionCatalogRoot         string       `json:"definition_catalog_root"`
 	Prompt                        PromptConfig `json:"prompt"`
 }
 
@@ -88,6 +90,7 @@ func DefaultConfig() Config {
 		MaxToolResultOutputDepth:      4,
 		MaxToolResultOutputFields:     64,
 		MaxToolResultOutputArrayItems: 32,
+		DefinitionCatalogRoot:         "",
 		Prompt: PromptConfig{
 			Language:        "Simplified Chinese",
 			NPCStyle:        "自然、简短、符合当前游戏 NPC 的语气",
@@ -141,6 +144,7 @@ func LoadConfigFile(path string) (Config, error) {
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: raw.MaxToolResultOutputArrayItems,
+		DefinitionCatalogRoot:         raw.DefinitionCatalogRoot,
 		Prompt:                        raw.Prompt,
 	}.WithDefaults()
 
