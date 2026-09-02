@@ -4,7 +4,7 @@
 > **Date:** 2026-08-31
 > **Scope:** Tool Policy Generalization, Turn Completion, Action Source Correlation, Interaction Guard, Async Action Lifecycle and AgentTurn Resume
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.6
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.8
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.8
 > **Entry ADR:** [Async Action Protocol Strategy ADR](GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)
 > **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5.6
 > **Previous Phase Gate:** Phase5.6 Stardew Dialogue Interaction Surface Accepted

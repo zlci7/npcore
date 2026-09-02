@@ -4,7 +4,7 @@
 > Date: 2026-08-20
 > Scope: Agent Identity Contract + 多 NPC Adapter 泛化 + 事件路由与每 Session 串行化
 > Architecture Baseline: GameAgent Runtime Architecture v0.2
-> Roadmap Baseline: GameAgent Phase3-Phase8 阶段规划 v0.3（Status: Roadmap Baseline）
+> Roadmap Baseline: GameAgent 阶段规划 v0.3（Status: Roadmap Baseline）
 > Protocol Baseline: [GameAgent Protocol v1alpha2 设计规范](./GameAgent%20Protocol%20v1alpha2%20设计规范.md)
 
 ------

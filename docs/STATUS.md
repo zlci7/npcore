@@ -4,7 +4,7 @@ World Is Agent is in experimental MVP0 development.
 
 This document is the public source of truth for current repository capabilities, validation scope, and known limits.
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-02.
 
 ## Validation Scope
 
@@ -56,6 +56,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Area | Current limit |
 | --- | --- |
 | Durable agent state | Memory is in-process and lost on runtime restart. |
+| Definition-backed context | Game and Agent Definition sources are planned for Phase7 and are not yet implemented. |
 | Long-term semantic memory | No vector store, embedding index, or durable episodic memory backend. |
 | Automatic reconnect | Adapter reconnect and environment recovery are future work. |
 | Durable async continuation | Async action waiting is process-local. |

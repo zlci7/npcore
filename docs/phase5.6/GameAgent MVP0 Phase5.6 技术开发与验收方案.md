@@ -4,7 +4,7 @@
 > **Date:** 2026-08-28
 > **Scope:** Stardew Adapter Interaction Surface + ContextFact Memory Projection
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.5
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.5
 > **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5 + Phase5.6 ContextFact additive update
 > **Previous Phase:** Phase5.5 Stardew Adapter Context Enrichment Accepted
 > **Next Phase:** Phase6 Async Action Lifecycle and AgentTurn Resume

@@ -4,7 +4,7 @@
 > **Date:** 2026-08-27
 > **Scope:** Stardew Adapter Context Enrichment
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.5
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.5
 > **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5
 > **Reference:** [Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)
 

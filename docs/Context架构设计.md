@@ -5,7 +5,37 @@
 > Scope: Context Sources + Context Engine + Model Context
 > Identity Baseline: `AgentSessionKey = game_id + world_id + entity_id`
 > Compatibility Baseline: [GameAgent 多游戏兼容性与 Agent Binding 决策](./summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md)
+> Phase7 Normative Subset: Candidate — [Phase7.0 Context Contract Entry Gate](./phase7/GameAgent%20MVP0%20Phase7.0%20技术开发与验收方案.md)
 > Design Goal: 为长期运行、多 World、多 Agent 的游戏 Agent Runtime 提供清晰、可扩展、可验证的上下文架构。
+
+---
+
+# 0. Phase7 Normative Subset
+
+Phase7 Core 使用本文的规范子集：
+
+```text
+Context Source Scope
+Definition / Instance separation
+Current Event ContextFacts
+Current Observation authority
+Current Turn Transcript
+Phase7 minimum budget contract
+```
+
+以下内容保留为 Future / Non-normative：
+
+```text
+Cognitive State
+Experience
+Episodic Memory
+Semantic Memory
+Vector Retrieval
+World State Projection
+完整 Context Source 插件框架
+```
+
+Phase7.0 只冻结 Runtime 当前主链路需要的 Context 合同，不冻结上述长期能力的完整实现方案。
 
 ---
 
@@ -922,6 +952,7 @@ Current Run 是 Context Engine 的查询 Anchor。
 GameID      = stardew-valley
 WorldID     = Farm001
 EntityID    = npc:Abigail
+DefinitionID = npc/abigail
 
 Event
 Observation
@@ -941,6 +972,7 @@ Current Run 不只是本身要进入 Context，更重要的是它决定 Context 
 game_id      = stardew-valley
 world_id     = Farm001
 entity_id    = npc:Abigail
+definition_id = npc/abigail
 ```
 
 Context Engine 可以推导：
@@ -956,7 +988,7 @@ World Environment State
     scope = stardew-valley + Farm001
 
 Agent Definition / Archetype
-    scope = stardew-valley + npc:Abigail
+    scope = stardew-valley + npc/abigail
 
 Agent Instance Descriptor
     scope = stardew-valley + Farm001 + npc:Abigail
@@ -977,6 +1009,28 @@ Agent Memory
 因此：
 
 > Context Engine 不需要猜“应该读谁的数据”，Scope Contract 已经回答这个问题。
+
+---
+
+## 10.1.1 Target EntityRef Canonical Resolution
+
+`target_entity_id` 必须在 Gateway / Trigger admission 阶段解析为唯一、无冲突的目标 `EntityRef`。
+
+```text
+target_entity_id 不存在于 GameEvent.entities
+    EventAck REJECTED。
+
+target_entity_id 出现一次
+    使用该 EntityRef。
+
+target_entity_id 出现多次且字段完全一致
+    规范化为同一 EntityRef。
+
+target_entity_id 出现多次且 definition_id / entity_type / display_name 冲突
+    EventAck REJECTED。
+```
+
+Context Engine 使用 canonical Target EntityRef，不按 `GameEvent.entities` 列表顺序选择第一个匹配项。
 
 ---
 
@@ -1086,6 +1140,16 @@ Memory
 ```
 
 进入 Model Context 时，ToolResult 应以 provider-neutral 形式回灌，并受当前 Turn 的 step、tool result output 和 context budget 限制。
+
+Phase7 的 Transcript 裁剪必须保持 ToolCall / ToolResult 关联完整。当前数据模型下，一个 Transcript 原子组是：
+
+```text
+一条包含 ToolCalls[] 的 assistant message
+    +
+紧随其后的、ToolResult IDs 与其对应的 tool message
+```
+
+裁剪时只能整组保留或整组删除。Model Context 不得保留孤立 ToolCall 或孤立 ToolResult，也不得破坏原始消息顺序和 `tool_call_id` 关联。
 
 ---
 
@@ -1442,6 +1506,26 @@ Current Turn Transcript
 
 在有限模型窗口中进行分配和裁剪。
 
+Phase7 第一版使用 provider-neutral approximate budget：
+
+```text
+预算单位 = UTF-8 serialized bytes
+```
+
+整体预算至少覆盖：
+
+```text
+Request.System
+Request.Messages
+Request.Tools
+Request.Controls
+必要的 section framing / labels
+```
+
+Provider SDK 外层 JSON envelope 不要求精确计入，但 ToolDefinition 不能被当作免费输入。
+
+结构化内容必须按字段、数组项或完整 Section 裁剪。Event payload、Observation state、ContextFact attributes 和 ToolResult output 不得被截成非法 JSON。
+
 长期 Context Engine 需要处理：
 
 ```text
@@ -1527,6 +1611,7 @@ Available Tools
 game_id      = stardew-valley
 world_id     = Farm001
 entity_id    = npc:Abigail
+definition_id = npc/abigail
 ```
 
 Current Run：
@@ -1558,10 +1643,11 @@ Context Engine：
    → stardew-valley
    → Farm001
    → npc:Abigail
+   → npc/abigail
 
 2. Load Definition
    → Game Definition
-   → Abigail Definition
+   → Abigail Agent Definition
 
 3. Load Environment State
    → Farm001 relevant world facts
@@ -2031,6 +2117,10 @@ Context Engine
 14. Storage Backend 不得反向定义 Context Domain Model。
 
 15. Vector Index 只能是可重建的 retrieval index，不能成为 Memory 唯一真源。
+
+16. Target EntityRef 必须唯一、无冲突；Runtime 不得按列表顺序选择第一个目标实体。
+
+17. Current Turn Transcript 进入模型前必须保持 ToolCall / ToolResult 关联完整。
 ```
 
 ---

@@ -4,7 +4,7 @@
 > **Date:** 2026-08-31
 > **Scope:** Tool Policy Generalization, Async Action Lifecycle, Action Source Correlation and Turn Completion Protocol Strategy
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.6
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.8
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.8
 > **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5.6
 
 ---

@@ -5,7 +5,7 @@
 > **Acceptance Date:** 2026-08-27
 > **Scope:** Bounded Multi-step AgentTurn with Tool Batch
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.4
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.4
 > **Entry Gate:** GameAgent 多游戏兼容性与 Agent Binding 决策 Accepted
 > **Protocol Target:** gameagent.protocol.v1alpha2 additive Phase5 revision
 > **Final Commit:** 372d2b6 fix: address phase5 review findings

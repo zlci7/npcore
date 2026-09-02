@@ -4,7 +4,7 @@
 > **Date:** 2026-09-01
 > **Scope:** Stardew Dialogue Interaction Convergence
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.6
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.9
+> **Roadmap Baseline:** GameAgent 阶段规划 v0.9
 > **Previous Phase:** Phase6 Async Action Lifecycle and AgentTurn Resume
 > **Reference:** ValleyTalk, SMAPI 4.5.2
 

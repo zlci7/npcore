@@ -34,6 +34,7 @@ Phase documents are implementation planning and validation records:
 - [Phase5.6](phase5.6/)
 - [Phase6](phase6/)
 - [Phase6.5](phase6.5/)
+- [Phase7](phase7/)
 
 The root [ROADMAP.md](../ROADMAP.md) is the public roadmap. Phase documents can contain internal terminology, temporary implementation plans, and historical acceptance details.
 

@@ -4,40 +4,43 @@ World Is Agent is an experimental MVP0 project. This public roadmap uses Now / N
 
 ## Now
 
-Stabilize the current Runtime + Stardew vertical slice.
+Complete the Phase7 Context Subsystem for the Runtime + Stardew vertical slice.
 
 Focus:
 
-- Keep README, architecture, status, and testing docs aligned with implementation.
-- Tighten Stardew dialogue and async action behavior around real game UX.
-- Make local setup and adapter installation more reproducible.
-- Expand protocol and adapter checks that can run outside the game.
-- Clarify provider compatibility and configuration expectations.
+- Freeze the Context contracts before implementation expands.
+- Add runtime-owned Game Definition and Agent Definition sources.
+- Build scoped Context projection from event, observation, memory, transcript, definitions, and tools.
+- Replace process-global environment tool exposure with EnvironmentSession-scoped Tool View snapshots.
+- Make context selection, budget limits, and build diagnostics deterministic and testable.
+- Validate the full path with real Stardew NPC dialogue.
 
 Exit signals:
 
-- A new contributor can understand the project from public docs.
-- The Go Runtime and C# adapter checks are documented and repeatable.
-- Stardew smoke testing has a clear path and known limits.
-- Current capabilities and limits are captured in `docs/STATUS.md`.
+- A model request clearly shows the right game definition, agent definition, event facts, observation, memory, transcript, and tool view.
+- Two Stardew NPCs can load different definitions without adapter-side prompt assembly.
+- Tool exposure and tool execution use the same immutable Turn Tool View.
+- Phase5 multi-step and Phase6 async action behavior remain stable.
+- Current capabilities and limits stay captured in `docs/STATUS.md`.
 
 ## Next
 
-Add environment recovery and durable agent state.
+Add Persistent Recent Memory, then environment recovery.
 
 Focus:
 
+- Schema version, compatible reads, migration, and explicit reset behavior for recent memory.
+- Bounded retention and idempotent writes for per-AgentSession memory.
 - Adapter reconnect and EnvironmentSession recovery.
 - Heartbeat and liveness semantics.
 - Capability registry scoping across reconnects.
 - Disconnect, late result, and idempotency behavior.
-- Persistent memory backend for AgentSession state.
 - Durable continuation strategy for async actions.
 
 Exit signals:
 
-- Runtime restart and adapter reconnect behavior are specified and tested.
 - Agent memory can survive process restart for a selected backend.
+- Runtime restart and adapter reconnect behavior are specified and tested.
 - Async action outcomes have clear recovery semantics.
 
 ## Later
@@ -50,7 +53,6 @@ Focus:
 - Fault injection for runtime, adapter, and provider boundaries.
 - Adapter conformance tests.
 - A second real adapter outside Stardew Valley.
-- More domain-neutral context and visible memory projection.
 - Versioned releases, migration policy, and trace retention/export.
 
 Exit signals:
