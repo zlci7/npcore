@@ -24,10 +24,11 @@ func LoadCatalogFromDir(root string) (Catalog, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		gameID := entry.Name()
-		gameDir := filepath.Join(root, gameID)
+		gameID := strings.TrimSpace(entry.Name())
+		gameDir := filepath.Join(root, entry.Name())
+		definitionsDir := filepath.Join(gameDir, "definitions")
 
-		game, hasGame, err := loadGameDefinition(gameDir, gameID)
+		game, hasGame, err := loadGameDefinition(definitionsDir, gameID)
 		if err != nil {
 			return Catalog{}, err
 		}
@@ -35,7 +36,7 @@ func LoadCatalogFromDir(root string) (Catalog, error) {
 			games = append(games, game)
 		}
 
-		loadedAgents, err := loadAgentDefinitions(filepath.Join(gameDir, "agents"), gameID)
+		loadedAgents, err := loadAgentDefinitions(filepath.Join(definitionsDir, "agents"), gameID)
 		if err != nil {
 			return Catalog{}, err
 		}
@@ -45,8 +46,8 @@ func LoadCatalogFromDir(root string) (Catalog, error) {
 	return NewCatalog(games, agents)
 }
 
-func loadGameDefinition(gameDir string, pathGameID string) (GameDefinition, bool, error) {
-	path := filepath.Join(gameDir, "game.json")
+func loadGameDefinition(definitionsDir string, pathGameID string) (GameDefinition, bool, error) {
+	path := filepath.Join(definitionsDir, "game.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

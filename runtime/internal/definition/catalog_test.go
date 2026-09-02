@@ -183,7 +183,7 @@ func TestNewCatalogRejectsUnsupportedSchemaVersion(t *testing.T) {
 
 func TestLoadCatalogFromDirLoadsStaticDefinitionFiles(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "stardew-valley", "game.json"), `{
+	writeFile(t, filepath.Join(root, " stardew-valley", "definitions", "game.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "stardew-valley",
   "title": "Stardew Valley",
@@ -193,7 +193,7 @@ func TestLoadCatalogFromDirLoadsStaticDefinitionFiles(t *testing.T) {
   "narrative_constraints": ["Stay grounded in Stardew Valley."],
   "source_version": "test"
 }`)
-	writeFile(t, filepath.Join(root, "stardew-valley", "agents", "abigail.json"), `{
+	writeFile(t, filepath.Join(root, " stardew-valley", "definitions", "agents", "abigail.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "stardew-valley",
   "definition_id": "npc:Abigail",
@@ -232,7 +232,7 @@ func TestLoadCatalogFromDirMissingDirectoryReturnsEmptyCatalog(t *testing.T) {
 
 func TestLoadCatalogFromDirRejectsMalformedJSON(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "stardew-valley", "game.json"), `{`)
+	writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "game.json"), `{`)
 
 	_, err := definition.LoadCatalogFromDir(root)
 	if err == nil {
@@ -245,7 +245,7 @@ func TestLoadCatalogFromDirRejectsMalformedJSON(t *testing.T) {
 
 func TestLoadCatalogFromDirRejectsPathScopeMismatch(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "stardew-valley", "game.json"), `{
+	writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "game.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "other-game"
 }`)
@@ -261,11 +261,11 @@ func TestLoadCatalogFromDirRejectsPathScopeMismatch(t *testing.T) {
 
 func TestLoadCatalogFromDirRejectsUnreadableAgentPath(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "game-a", "game.json"), `{
+	writeFile(t, filepath.Join(root, "game-a", "definitions", "game.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "game-a"
 }`)
-	agentsPath := filepath.Join(root, "game-a", "agents")
+	agentsPath := filepath.Join(root, "game-a", "definitions", "agents")
 	if err := os.WriteFile(agentsPath, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("write agents path: %v", err)
 	}
