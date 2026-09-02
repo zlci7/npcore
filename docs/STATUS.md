@@ -35,7 +35,8 @@ Stardew Valley is the first real adapter and validation environment.
 | Actions | Sync action result handling and async action status/result handling. |
 | Turn completion | Runtime can send best-effort `TurnCompletion` to the adapter. |
 | Memory | Process-local short-term memory scoped by AgentSession. |
-| Context | Context projection from observation, recent memory, tool results, and runtime policy. |
+| Definitions | Optional static Runtime catalog for Game Definitions and Agent Definitions scoped by `game_id + definition_id`. |
+| Context | Context projection from observation, recent memory, tool results, runtime policy, optional static definitions, and Agent Instance Descriptor. |
 | Providers | Provider-neutral model interface with Fake, DeepSeek, and OpenAI implementations. |
 | Trace | JSONL turn trace written under `runtime/.local/traces.jsonl`. |
 
@@ -56,7 +57,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Area | Current limit |
 | --- | --- |
 | Durable agent state | Memory is in-process and lost on runtime restart. |
-| Definition-backed context | Game and Agent Definition sources are planned for Phase7 and are not yet implemented. |
+| Full Context Engine | Tool View snapshot, budgeted selection/cropping, BuildReport, and stable Context Projection layers remain future Phase7 work. |
 | Long-term semantic memory | No vector store, embedding index, or durable episodic memory backend. |
 | Automatic reconnect | Adapter reconnect and environment recovery are future work. |
 | Durable async continuation | Async action waiting is process-local. |

@@ -217,6 +217,40 @@ func TestLoadCatalogFromDirLoadsStaticDefinitionFiles(t *testing.T) {
 	}
 }
 
+func TestLoadCatalogFromDirLoadsBundledStardewDefinitions(t *testing.T) {
+	catalog, err := definition.LoadCatalogFromDir(filepath.Join("..", "..", "config", "games"))
+	if err != nil {
+		t.Fatalf("LoadCatalogFromDir returned error: %v", err)
+	}
+
+	game, ok := catalog.FindGame("stardew-valley")
+	if !ok {
+		t.Fatal("FindGame did not find bundled stardew-valley definition")
+	}
+	if game.GameID != "stardew-valley" {
+		t.Fatalf("GameID = %q, want stardew-valley", game.GameID)
+	}
+	if game.Title == "" || game.Summary == "" {
+		t.Fatalf("bundled Stardew game definition should include title and summary: %+v", game)
+	}
+
+	for _, definitionID := range []string{"npc:Abigail", "npc:Linus", "archetype:town_villager"} {
+		agent, ok := catalog.FindAgent("stardew-valley", definitionID)
+		if !ok {
+			t.Fatalf("FindAgent did not find bundled %s definition", definitionID)
+		}
+		if agent.GameID != "stardew-valley" {
+			t.Fatalf("%s GameID = %q, want stardew-valley", definitionID, agent.GameID)
+		}
+		if agent.DefinitionID != definitionID {
+			t.Fatalf("DefinitionID = %q, want %q", agent.DefinitionID, definitionID)
+		}
+		if agent.Identity == "" {
+			t.Fatalf("%s identity is empty", definitionID)
+		}
+	}
+}
+
 func TestLoadCatalogFromDirMissingDirectoryReturnsEmptyCatalog(t *testing.T) {
 	catalog, err := definition.LoadCatalogFromDir(filepath.Join(t.TempDir(), "missing"))
 	if err != nil {

@@ -203,6 +203,17 @@ func TestBundledToolInstructionDoesNotNameGameSpecificTools(t *testing.T) {
 	}
 }
 
+func TestBundledStardewConfigEnablesDefinitionCatalogRoot(t *testing.T) {
+	cfg, err := agent.LoadConfigFile(filepath.Join("..", "..", "config", "games", "stardew-valley", "agent.json"))
+	if err != nil {
+		t.Fatalf("load bundled Stardew config: %v", err)
+	}
+
+	if filepath.ToSlash(cfg.DefinitionCatalogRoot) != "runtime/config/games" {
+		t.Fatalf("DefinitionCatalogRoot = %q, want runtime/config/games", cfg.DefinitionCatalogRoot)
+	}
+}
+
 func gameSpecificToolInstructionTerms() []string {
 	return []string{
 		"present_dialogue",

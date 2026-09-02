@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -387,6 +388,76 @@ func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) 
 	for _, unwanted := range []string{"world:alpha", "creature:alpha", "display_name: Alpha"} {
 		if strings.Contains(betaContent, unwanted) {
 			t.Fatalf("beta request should not contain alpha scope %q:\n%s", unwanted, betaContent)
+		}
+	}
+}
+
+func TestHandleEventRendersDifferentBundledStardewDefinitions(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "done"},
+			},
+		},
+	}
+	catalog, err := definition.LoadCatalogFromDir(filepath.Join("..", "..", "config", "games"))
+	if err != nil {
+		t.Fatalf("LoadCatalogFromDir returned error: %v", err)
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	conn := agent.ConnectionContext{GameID: "stardew-valley", SessionID: "session:test"}
+	abigailKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "farm:one", EntityID: "npc:Abigail"}
+	linusKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "farm:one", EntityID: "npc:Linus"}
+	abigailTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     abigailKey.EntityID,
+		EntityType:   "npc",
+		DisplayName:  "Abigail",
+		DefinitionId: "npc:Abigail",
+	}
+	linusTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     linusKey.EntityID,
+		EntityType:   "npc",
+		DisplayName:  "Linus",
+		DefinitionId: "npc:Linus",
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, abigailKey, gameEvent("event_abigail", abigailKey), abigailTarget); err != nil {
+		t.Fatalf("Abigail HandleEvent returned error: %v", err)
+	}
+	if err := loop.HandleEvent(context.Background(), env, conn, linusKey, gameEvent("event_linus", linusKey), linusTarget); err != nil {
+		t.Fatalf("Linus HandleEvent returned error: %v", err)
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(provider.requests))
+	}
+	abigailContent := provider.requests[0].Messages[0].Content
+	linusContent := provider.requests[1].Messages[0].Content
+	assertRequestContentContains(t, abigailContent,
+		"title: Stardew Valley",
+		"identity: Abigail is an adventurous Pelican Town villager who is drawn to music, games, and the mines.",
+		"entity_id: npc:Abigail",
+		"display_name: Abigail",
+		"definition_id: npc:Abigail",
+	)
+	assertRequestContentContains(t, linusContent,
+		"title: Stardew Valley",
+		"identity: Linus is a self-reliant villager who lives close to nature near the mountain.",
+		"entity_id: npc:Linus",
+		"display_name: Linus",
+		"definition_id: npc:Linus",
+	)
+	for _, unwanted := range []string{"identity: Linus is", "entity_id: npc:Linus", "display_name: Linus"} {
+		if strings.Contains(abigailContent, unwanted) {
+			t.Fatalf("Abigail request should not contain Linus projection %q:\n%s", unwanted, abigailContent)
+		}
+	}
+	for _, unwanted := range []string{"identity: Abigail is", "entity_id: npc:Abigail", "display_name: Abigail"} {
+		if strings.Contains(linusContent, unwanted) {
+			t.Fatalf("Linus request should not contain Abigail projection %q:\n%s", unwanted, linusContent)
 		}
 	}
 }
