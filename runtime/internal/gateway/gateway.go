@@ -197,7 +197,7 @@ func (s *Server) dispatchGameEvent(
 	// Step 2：pre-turn 校验 + 身份解析（event_type 非空 / target_entity_id /
 	// 目标在 entities 内 / Resolve 三要素），任一失败都 REJECTED，
 	// 不创建 lane、不创建 turn trace。
-	key, ackErr := resolveAgentSessionKey(conn, event)
+	resolved, ackErr := resolveAgentTarget(conn, event)
 	if ackErr != nil {
 		return env.send(eventAckMessage(
 			messageID,
@@ -206,6 +206,7 @@ func (s *Server) dispatchGameEvent(
 			ackErr,
 		))
 	}
+	key := resolved.Key
 
 	// Step 3：按身份 key 拿/建该 Agent 的 ExecutionLane。
 	// 每个 Agent 一条 lane = 同一 Agent 的事件 FIFO 串行、不同 Agent 并行。
@@ -232,7 +233,7 @@ func (s *Server) dispatchGameEvent(
 		ID:       event.EventId,
 		Admitted: admitted,
 		Run: func(taskCtx context.Context) {
-			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, event); err != nil {
+			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, event, resolved.Target); err != nil {
 				fmt.Printf("agent loop failed: %s\n", logSafeError(err))
 			}
 		},
@@ -303,8 +304,21 @@ func logSafeError(err error) string {
 //	校验 3  目标必须真实存在于 event.Entities，防 Adapter 声明矛盾
 //	校验 4  Resolve 三要素（game/world/entity）缺一 → 拒绝
 func resolveAgentSessionKey(conn agent.ConnectionContext, event *protocolv1alpha2.GameEvent) (session.AgentSessionKey, *protocolv1alpha2.Error) {
+	resolved, ackErr := resolveAgentTarget(conn, event)
+	if ackErr != nil {
+		return session.AgentSessionKey{}, ackErr
+	}
+	return resolved.Key, nil
+}
+
+type resolvedAgentTarget struct {
+	Key    session.AgentSessionKey
+	Target *protocolv1alpha2.EntityRef
+}
+
+func resolveAgentTarget(conn agent.ConnectionContext, event *protocolv1alpha2.GameEvent) (resolvedAgentTarget, *protocolv1alpha2.Error) {
 	if strings.TrimSpace(event.EventType) == "" {
-		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+		return resolvedAgentTarget{}, &protocolv1alpha2.Error{
 			Code:    "event_type_missing",
 			Message: "GameEvent.event_type is required",
 		}
@@ -314,16 +328,21 @@ func resolveAgentSessionKey(conn agent.ConnectionContext, event *protocolv1alpha
 	// trigger，且满足 target/world/entity identity contract，就可以进入
 	// AgentTurn。具体 trigger 语义由 Adapter / game-specific policy 解释。
 	// 校验 2：typed target_entity_id 是路由依据，为空无法确定事件归属。
-	if event.TargetEntityId == "" {
-		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+	targetEntityID := strings.TrimSpace(event.TargetEntityId)
+	if targetEntityID == "" {
+		return resolvedAgentTarget{}, &protocolv1alpha2.Error{
 			Code:    "target_entity_missing",
 			Message: "GameEvent.target_entity_id is required",
 		}
 	}
 	// 校验 3：目标必须引用 entities 中已有的 EntityRef，
 	// 否则会解析出一个"凭空存在"的 Agent 身份。
-	if !eventContainsEntity(event, event.TargetEntityId) {
-		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+	target, ackErr := canonicalTargetEntity(event, targetEntityID)
+	if ackErr != nil {
+		return resolvedAgentTarget{}, ackErr
+	}
+	if target == nil {
+		return resolvedAgentTarget{}, &protocolv1alpha2.Error{
 			Code:    "target_entity_not_in_event",
 			Message: fmt.Sprintf("target_entity_id %q is not present in GameEvent.entities", event.TargetEntityId),
 		}
@@ -332,23 +351,54 @@ func resolveAgentSessionKey(conn agent.ConnectionContext, event *protocolv1alpha
 	// 校验 4：身份 = GameScope + WorldScope + StableEntityIdentity；
 	// 任一为空（如 world_id 未随事件传递）都拒绝，不用临时值兜底，
 	// 否则会静默破坏"EnvironmentSession 变化不影响身份"的不变量。
-	key, err := session.Resolve(conn.GameID, event.WorldId, event.TargetEntityId)
+	key, err := session.Resolve(strings.TrimSpace(conn.GameID), strings.TrimSpace(event.WorldId), target.GetEntityId())
 	if err != nil {
-		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+		return resolvedAgentTarget{}, &protocolv1alpha2.Error{
 			Code:    "identity_scope_missing",
 			Message: err.Error(),
 		}
 	}
-	return key, nil
+	return resolvedAgentTarget{Key: key, Target: target}, nil
 }
 
-func eventContainsEntity(event *protocolv1alpha2.GameEvent, entityID string) bool {
-	for _, entity := range event.Entities {
-		if entity != nil && entity.EntityId == entityID {
-			return true
+func canonicalTargetEntity(event *protocolv1alpha2.GameEvent, targetEntityID string) (*protocolv1alpha2.EntityRef, *protocolv1alpha2.Error) {
+	var resolved *protocolv1alpha2.EntityRef
+	for _, entity := range event.GetEntities() {
+		normalized := normalizeEntityRef(entity)
+		if normalized == nil || normalized.GetEntityId() != targetEntityID {
+			continue
+		}
+		if resolved == nil {
+			resolved = normalized
+			continue
+		}
+		if !sameCanonicalEntityRef(resolved, normalized) {
+			return nil, &protocolv1alpha2.Error{
+				Code:    "target_entity_conflict",
+				Message: fmt.Sprintf("target_entity_id %q has conflicting EntityRef entries", event.TargetEntityId),
+			}
 		}
 	}
-	return false
+	return resolved, nil
+}
+
+func normalizeEntityRef(entity *protocolv1alpha2.EntityRef) *protocolv1alpha2.EntityRef {
+	if entity == nil {
+		return nil
+	}
+	return &protocolv1alpha2.EntityRef{
+		EntityId:     strings.TrimSpace(entity.GetEntityId()),
+		EntityType:   strings.TrimSpace(entity.GetEntityType()),
+		DisplayName:  strings.TrimSpace(entity.GetDisplayName()),
+		DefinitionId: strings.TrimSpace(entity.GetDefinitionId()),
+	}
+}
+
+func sameCanonicalEntityRef(a *protocolv1alpha2.EntityRef, b *protocolv1alpha2.EntityRef) bool {
+	return a.GetEntityId() == b.GetEntityId() &&
+		a.GetEntityType() == b.GetEntityType() &&
+		a.GetDisplayName() == b.GetDisplayName() &&
+		a.GetDefinitionId() == b.GetDefinitionId()
 }
 
 func eventAckMessage(

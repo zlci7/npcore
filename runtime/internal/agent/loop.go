@@ -143,6 +143,7 @@ func (l *Loop) HandleEvent(
 	conn ConnectionContext,
 	key session.AgentSessionKey,
 	event *protocolv1alpha2.GameEvent,
+	target ...*protocolv1alpha2.EntityRef,
 ) error {
 	if key.EntityID == "" {
 		return fmt.Errorf("agent session entity id is empty")
