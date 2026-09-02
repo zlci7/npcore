@@ -157,7 +157,7 @@ func (s *Server) Connect(stream protocolv1alpha2.GameAgentGateway_ConnectServer)
 // dispatchGameEvent 处理单个 GameEvent 的 admission 全流程：
 //
 //	Step 1  幂等：event_id 校验 + EnvironmentSession 内去重
-//	Step 2  契约：resolveAgentSessionKey 完成 pre-turn 校验与身份解析
+//	Step 2  契约：resolveAgentTarget 完成 pre-turn 校验、身份解析和 canonical target 解析
 //	Step 3  路由：LaneStore.GetOrCreate 按身份拿/建串行队列
 //	Step 4  包装：组装 task（Run 执行 Turn / Abort 断连取消）+ admission barrier
 //	Step 5  背压：非阻塞入队，队列满 REJECTED
