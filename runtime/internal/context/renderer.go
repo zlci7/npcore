@@ -7,11 +7,7 @@ import (
 	"strings"
 
 	"gameagent/runtime/internal/definition"
-	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
-
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 type RendererConfig struct {
@@ -32,28 +28,21 @@ func NewRenderer(config RendererConfig) Renderer {
 	return Renderer{config: config}
 }
 
-// Render 负责把 AgentContext 转成 Provider Request。
+// Render 负责把 ContextProjection 转成 Provider Request。
 // Renderer 在这里固定 Current Observation 优先于 Recent Memory 的上下文语义。
-func (r Renderer) Render(agentContext AgentContext) (model.Request, error) {
-	if agentContext.Event == nil {
-		return model.Request{}, fmt.Errorf("%w: event is required", ErrInvalidInput)
-	}
-	if agentContext.Observation == nil {
-		return model.Request{}, fmt.Errorf("%w: observation is required", ErrInvalidInput)
-	}
-
+func (r Renderer) Render(projection ContextProjection) (model.Request, error) {
 	messages := []model.Message{
 		{
 			Role:    model.RoleUser,
-			Content: r.renderUserMessage(agentContext),
+			Content: r.renderUserMessage(projection),
 		},
 	}
-	messages = append(messages, r.renderTranscript(agentContext.Transcript)...)
+	messages = append(messages, r.renderTranscript(projection.Transcript)...)
 
 	return model.Request{
-		System:   agentContext.RuntimePolicy,
+		System:   projection.RuntimePolicy,
 		Messages: messages,
-		Tools:    append([]model.ToolDefinition(nil), agentContext.Tools...),
+		Tools:    append([]model.ToolDefinition(nil), projection.Tools...),
 		Controls: []model.ControlDefinition{
 			{
 				Kind:        model.ControlSettle,
@@ -288,7 +277,7 @@ func mustMarshalJSONString(value any) string {
 
 // renderUserMessage 渲染本轮模型输入的 user message。
 // 它把 Recent Memory、Current Event 和 Current Observation 放进同一个可读上下文块。
-func (r Renderer) renderUserMessage(agentContext AgentContext) string {
+func (r Renderer) renderUserMessage(projection ContextProjection) string {
 	return fmt.Sprintf(`[Recent Memory]
 %s
 
@@ -304,6 +293,9 @@ func (r Renderer) renderUserMessage(agentContext AgentContext) string {
 [Current Event]
 %s
 
+[Current Event Context Facts]
+%s
+
 [Current Observation]
 %s
 
@@ -315,12 +307,13 @@ If Recent Memory is from today and current game time has not clearly advanced mu
 
 Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.
 `,
-		r.renderMemories(agentContext.RecentMemories, currentGameTime(agentContext)),
-		renderGameDefinition(agentContext.GameDefinition),
-		renderAgentDefinition(agentContext.AgentDefinition),
-		renderAgentDescriptor(agentContext.AgentDescriptor),
-		protoToJSON(agentContext.Event),
-		protoToJSON(agentContext.Observation),
+		renderRecentMemoryProjection(projection.RecentMemory),
+		renderGameDefinition(projection.GameDefinition),
+		renderAgentDefinition(projection.AgentDefinition),
+		renderAgentDescriptor(projection.AgentDescriptor),
+		renderCurrentEvent(projection.CurrentEvent),
+		renderCurrentEventContextFacts(projection.CurrentEventContextFacts),
+		renderCurrentObservation(projection.CurrentObservation),
 	)
 }
 
@@ -406,24 +399,93 @@ func emptyLabel(value string) string {
 	return value
 }
 
-// renderMemories 渲染 Recent Memory section。
-// 没有可用 Memory 时显式输出 (none)，让模型知道不是遗漏上下文。
-func (r Renderer) renderMemories(records []memory.Record, currentTime *memory.GameTimeSnapshot) string {
-	return renderRecentMemoryProjection(projectRecentMemories(records, r.config.MemoryContextSizeLimit, currentTime))
+// renderCurrentEvent 渲染 Engine 给出的当前事件投影。
+func renderCurrentEvent(event EventProjection) string {
+	fields := make(map[string]any)
+	appendStringField(fields, "event_id", event.EventID)
+	appendStringField(fields, "event_type", event.EventType)
+	appendStringField(fields, "world_id", event.WorldID)
+	appendStringField(fields, "target_entity_id", event.TargetEntityID)
+	if event.Sequence != 0 {
+		fields["sequence"] = event.Sequence
+	}
+	if event.GameTime != nil {
+		fields["game_time"] = gameTimeJSON(event.GameTime)
+	}
+	if event.CanonicalTarget != nil {
+		fields["canonical_target"] = entityRefJSON(event.CanonicalTarget)
+	}
+	if len(event.Payload) > 0 {
+		fields["payload"] = event.Payload
+	}
+	return renderJSON(fields)
 }
 
-// protoToJSON 把 protobuf message 转成缩进 JSON。
-// 渲染失败时返回空对象，避免上下文渲染阶段因为展示问题中断 Turn。
-func protoToJSON(message proto.Message) string {
-	if message == nil {
+func renderCurrentEventContextFacts(facts []ContextFactProjection) string {
+	if len(facts) == 0 {
+		return "(none)"
+	}
+	return renderJSON(facts)
+}
+
+func renderCurrentObservation(observation ObservationProjection) string {
+	fields := make(map[string]any)
+	appendStringField(fields, "world_id", observation.WorldID)
+	appendStringField(fields, "entity_id", observation.EntityID)
+	if observation.GameTime != nil {
+		fields["game_time"] = gameTimeJSON(observation.GameTime)
+	}
+	if len(observation.State) > 0 {
+		fields["state"] = observation.State
+	}
+	return renderJSON(fields)
+}
+
+func appendStringField(fields map[string]any, key string, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		fields[key] = value
+	}
+}
+
+func gameTimeJSON(gameTime interface {
+	GetYear() int32
+	GetSeason() int32
+	GetDay() int32
+	GetHour() int32
+	GetMinute() int32
+	GetTick() int64
+}) map[string]any {
+	return map[string]any{
+		"day":    gameTime.GetDay(),
+		"hour":   gameTime.GetHour(),
+		"minute": gameTime.GetMinute(),
+		"season": gameTime.GetSeason(),
+		"tick":   gameTime.GetTick(),
+		"year":   gameTime.GetYear(),
+	}
+}
+
+func entityRefJSON(ref interface {
+	GetEntityId() string
+	GetEntityType() string
+	GetDisplayName() string
+	GetDefinitionId() string
+}) map[string]any {
+	fields := make(map[string]any)
+	appendStringField(fields, "entity_id", ref.GetEntityId())
+	appendStringField(fields, "entity_type", ref.GetEntityType())
+	appendStringField(fields, "display_name", ref.GetDisplayName())
+	appendStringField(fields, "definition_id", ref.GetDefinitionId())
+	return fields
+}
+
+func renderJSON(value any) string {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
 		return "{}"
 	}
-
-	data, err := protojson.MarshalOptions{
-		Multiline: true,
-		Indent:    "  ",
-	}.Marshal(message)
-	if err != nil {
+	if string(data) == "null" {
 		return "{}"
 	}
 	return string(data)

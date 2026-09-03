@@ -235,6 +235,39 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 	assertTraceContains(t, recorder.events, trace.EventContextUpdated)
 }
 
+func TestHandleEventFailsBeforeProviderWhenContextScopeMismatches(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{}
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+	event := gameEvent("event_scope_mismatch", key)
+	event.TargetEntityId = "npc:Haley"
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, event)
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want context scope mismatch")
+	}
+	if !strings.Contains(err.Error(), "event target_entity_id does not match session key") {
+		t.Fatalf("error = %v, want event target scope mismatch", err)
+	}
+	if got := len(provider.requests); got != 0 {
+		t.Fatalf("provider request count = %d, want 0", got)
+	}
+	if got := len(env.submittedActions); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED {
+		t.Fatalf("completion status = %s, want failed", completion.Status)
+	}
+	if completion.GetError().GetCode() != "context_build_failed" {
+		t.Fatalf("completion error code = %q, want context_build_failed", completion.GetError().GetCode())
+	}
+}
+
 func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *testing.T) {
 	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}

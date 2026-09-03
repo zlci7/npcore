@@ -17,6 +17,7 @@ import (
 func TestEngineBuildCreatesContextProjectionFromValidatedInput(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
 	input := validEngineInput(t)
+	input.Observation.State = mustStruct(t, map[string]any{"weather": "rain"})
 
 	projection, err := engine.Build(input)
 	if err != nil {
@@ -41,11 +42,14 @@ func TestEngineBuildCreatesContextProjectionFromValidatedInput(t *testing.T) {
 	if projection.RuntimePolicy != "runtime policy" {
 		t.Fatalf("RuntimePolicy = %q, want runtime policy", projection.RuntimePolicy)
 	}
-	if projection.Event.GetEventId() != "event-1" {
-		t.Fatalf("Event.EventId = %q, want event-1", projection.Event.GetEventId())
+	if projection.CurrentEvent.EventID != "event-1" {
+		t.Fatalf("CurrentEvent.EventID = %q, want event-1", projection.CurrentEvent.EventID)
 	}
-	if projection.Observation.GetEntityId() != "npc:Abigail" {
-		t.Fatalf("Observation.EntityId = %q, want npc:Abigail", projection.Observation.GetEntityId())
+	if projection.CurrentObservation.EntityID != "npc:Abigail" || projection.CurrentObservation.WorldID != "world-a" {
+		t.Fatalf("CurrentObservation scope = %+v, want world-a/npc:Abigail", projection.CurrentObservation)
+	}
+	if got := projection.CurrentObservation.State["weather"]; got != "rain" {
+		t.Fatalf("CurrentObservation.State[weather] = %#v, want rain", got)
 	}
 	if got := len(projection.Tools); got != 1 {
 		t.Fatalf("Tools length = %d, want 1", got)

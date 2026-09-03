@@ -1441,7 +1441,7 @@ func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
 	for _, want := range []string{
 		"[Recent Memory]",
 		"previous interaction",
-		`said "gateway memory line"`,
+		`tool "speak" status "ACTION_STATUS_SUCCEEDED" arguments {"text":"gateway memory line"}`,
 		"gateway memory line",
 	} {
 		if !strings.Contains(secondPrompt, want) {
@@ -1450,7 +1450,6 @@ func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"event_1",
-		"ACTION_STATUS_SUCCEEDED",
 		"source_turn_id",
 	} {
 		if strings.Contains(secondPrompt, unwanted) {
@@ -1528,7 +1527,7 @@ func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
 	for _, want := range []string{
 		"[Recent Memory]",
 		"previous interaction",
-		`said "gateway memory line"`,
+		`tool "speak" status "ACTION_STATUS_SUCCEEDED" arguments {"text":"gateway memory line"}`,
 		"gateway memory line",
 	} {
 		if !strings.Contains(secondPrompt, want) {

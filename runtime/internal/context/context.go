@@ -40,13 +40,9 @@ type ContextProjection struct {
 
 	RuntimePolicy string
 
-	RecentMemories []memory.Record
-
-	Event       *protocolv1alpha2.GameEvent
-	Observation *protocolv1alpha2.Observation
-
 	CurrentEvent             EventProjection
 	CurrentEventContextFacts []ContextFactProjection
+	CurrentObservation       ObservationProjection
 
 	RecentMemory []MemoryProjection
 
@@ -74,6 +70,13 @@ type ContextFactProjection struct {
 	Text           string         `json:"text,omitempty"`
 	Label          string         `json:"label,omitempty"`
 	Attributes     map[string]any `json:"attributes,omitempty"`
+}
+
+type ObservationProjection struct {
+	WorldID  string                     `json:"world_id,omitempty"`
+	EntityID string                     `json:"entity_id,omitempty"`
+	GameTime *protocolv1alpha2.GameTime `json:"game_time,omitempty"`
+	State    map[string]any             `json:"state,omitempty"`
 }
 
 type MemoryProjection struct {
@@ -118,11 +121,9 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		GameDefinition:           copyGameDefinition(input.GameDefinition),
 		AgentDefinition:          copyAgentDefinition(input.AgentDefinition),
 		RuntimePolicy:            input.RuntimePolicy,
-		RecentMemories:           append([]memory.Record(nil), input.RecentMemories...),
-		Event:                    input.Event,
-		Observation:              input.Observation,
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
+		CurrentObservation:       projectCurrentObservation(input.Observation),
 		RecentMemory:             projectRecentMemories(input.RecentMemories, e.config.MemoryContextSizeLimit, currentGameTimeFromEventObservation(input.Event, input.Observation)),
 		Tools:                    input.TurnToolView.Available(),
 		Transcript:               copyMessages(input.Transcript),
@@ -245,6 +246,20 @@ func projectCurrentEventContextFacts(facts []*protocolv1alpha2.ContextFact) []Co
 	return out
 }
 
+func projectCurrentObservation(observation *protocolv1alpha2.Observation) ObservationProjection {
+	state := map[string]any(nil)
+	if observation.GetState() != nil {
+		state = copyMap(observation.GetState().AsMap())
+	}
+
+	return ObservationProjection{
+		WorldID:  observation.GetWorldId(),
+		EntityID: observation.GetEntityId(),
+		GameTime: observation.GetGameTime(),
+		State:    state,
+	}
+}
+
 // Build 负责建立 AgentContext 边界。
 // 它只做结构化组装与必要校验，不负责 prompt 文本渲染。
 func (Builder) Build(input BuildInput) (AgentContext, error) {
@@ -262,16 +277,17 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 	descriptor.SessionKey = input.SessionKey
 
 	return AgentContext{
-		SessionKey:      input.SessionKey,
-		AgentDescriptor: descriptor,
-		GameDefinition:  copyGameDefinition(input.GameDefinition),
-		AgentDefinition: copyAgentDefinition(input.AgentDefinition),
-		RuntimePolicy:   input.RuntimePolicy,
-		RecentMemories:  append([]memory.Record(nil), input.RecentMemories...),
-		Event:           input.Event,
-		Observation:     input.Observation,
-		Tools:           append([]model.ToolDefinition(nil), input.Tools...),
-		Transcript:      copyMessages(input.Transcript),
+		SessionKey:               input.SessionKey,
+		AgentDescriptor:          descriptor,
+		GameDefinition:           copyGameDefinition(input.GameDefinition),
+		AgentDefinition:          copyAgentDefinition(input.AgentDefinition),
+		RuntimePolicy:            input.RuntimePolicy,
+		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
+		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
+		CurrentObservation:       projectCurrentObservation(input.Observation),
+		RecentMemory:             projectRecentMemories(input.RecentMemories, 0, currentGameTimeFromEventObservation(input.Event, input.Observation)),
+		Tools:                    append([]model.ToolDefinition(nil), input.Tools...),
+		Transcript:               copyMessages(input.Transcript),
 	}, nil
 }
 

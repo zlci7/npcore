@@ -180,10 +180,6 @@ func stableJSON(value any) string {
 	return string(data)
 }
 
-func currentGameTime(agentContext AgentContext) *memory.GameTimeSnapshot {
-	return currentGameTimeFromEventObservation(agentContext.Event, agentContext.Observation)
-}
-
 func currentGameTimeFromEventObservation(event *protocolv1alpha2.GameEvent, observation *protocolv1alpha2.Observation) *memory.GameTimeSnapshot {
 	if event != nil {
 		if snapshot := gameTimeSnapshot(event.GetGameTime()); snapshot != nil {

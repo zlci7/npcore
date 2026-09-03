@@ -43,7 +43,7 @@ type Loop struct {
 	memoryStore     memory.Store
 	memoryProjector memoryProjector
 	definitions     definition.Catalog
-	contextBuilder  agentcontext.Builder
+	contextEngine   agentcontext.Engine
 	contextRenderer agentcontext.Renderer
 }
 
@@ -114,7 +114,13 @@ func NewLoop(modelProvider model.Provider, recorder trace.Recorder, config Confi
 		config:          config,
 		memoryStore:     memory.NewInMemoryStoreWithMaxRecords(defaultMemoryStoreMaxRecords(config.RecentMemoryLimit)),
 		memoryProjector: memory.NewProjector(nil),
-		contextBuilder:  agentcontext.NewBuilder(),
+		contextEngine: agentcontext.NewEngine(agentcontext.EngineConfig{
+			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
+			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
+			MaxToolResultOutputDepth:      config.MaxToolResultOutputDepth,
+			MaxToolResultOutputFields:     config.MaxToolResultOutputFields,
+			MaxToolResultOutputArrayItems: config.MaxToolResultOutputArrayItems,
+		}),
 		contextRenderer: agentcontext.NewRenderer(agentcontext.RendererConfig{
 			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
 			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
@@ -207,13 +213,14 @@ func (l *Loop) HandleEvent(
 
 	descriptor := definition.NewAgentInstanceDescriptor(key, target)
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
-	return l.runBoundedSteps(ctx, env, key, descriptor, event, obs, recentMemories, toolView, turnID, turnTracer)
+	return l.runBoundedSteps(ctx, env, key, target, descriptor, event, obs, recentMemories, toolView, turnID, turnTracer)
 }
 
 func (l *Loop) runBoundedSteps(
 	ctx context.Context,
 	env Environment,
 	key session.AgentSessionKey,
+	target *protocolv1alpha2.EntityRef,
 	descriptor definition.AgentInstanceDescriptor,
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
@@ -233,7 +240,7 @@ func (l *Loop) runBoundedSteps(
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
 
-		req, err := l.buildModelRequest(key, descriptor, event, obs, recentMemories, toolView, transcript)
+		req, err := l.buildModelRequest(key, target, descriptor, event, obs, recentMemories, toolView, transcript)
 		if err != nil {
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": contextFailureReason(err)},
@@ -557,6 +564,7 @@ func turnCompletionError(reason string, err error) *protocolv1alpha2.Error {
 
 func (l *Loop) buildModelRequest(
 	key session.AgentSessionKey,
+	target *protocolv1alpha2.EntityRef,
 	descriptor definition.AgentInstanceDescriptor,
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
@@ -565,8 +573,9 @@ func (l *Loop) buildModelRequest(
 	transcript []model.Message,
 ) (model.Request, error) {
 	gameDefinition, agentDefinition := l.resolveDefinitions(key, descriptor)
-	agentCtx, err := l.contextBuilder.Build(agentcontext.BuildInput{
+	projection, err := l.contextEngine.Build(agentcontext.BuildInput{
 		SessionKey:      key,
+		CanonicalTarget: target,
 		AgentDescriptor: descriptor,
 		GameDefinition:  gameDefinition,
 		AgentDefinition: agentDefinition,
@@ -574,14 +583,14 @@ func (l *Loop) buildModelRequest(
 		Event:           event,
 		Observation:     obs,
 		RecentMemories:  recentMemories,
-		Tools:           toolView.Available(),
+		TurnToolView:    toolView,
 		Transcript:      transcript,
 	})
 	if err != nil {
 		return model.Request{}, err
 	}
 
-	req, err := l.contextRenderer.Render(agentCtx)
+	req, err := l.contextRenderer.Render(projection)
 	if err != nil {
 		return model.Request{}, err
 	}

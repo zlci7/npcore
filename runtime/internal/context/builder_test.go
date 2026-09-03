@@ -390,6 +390,61 @@ func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *test
 	)
 }
 
+func TestRendererConsumesContextProjectionOnly(t *testing.T) {
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	tool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
+	projection := agentcontext.ContextProjection{
+		RuntimePolicy: "policy",
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey:   session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+			EntityType:   "npc",
+			DisplayName:  "Abigail",
+			DefinitionID: "npc/abigail",
+		},
+		GameDefinition:  &definition.GameDefinition{Title: "Projected Game"},
+		AgentDefinition: &definition.AgentDefinition{Identity: "Projected agent identity."},
+		CurrentEvent: agentcontext.EventProjection{
+			EventID:        "projected-event",
+			EventType:      "projected_event",
+			WorldID:        "world-a",
+			TargetEntityID: "npc:Abigail",
+			Payload:        map[string]any{"payload_value": "kept"},
+		},
+		CurrentEventContextFacts: []agentcontext.ContextFactProjection{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          "Projected fact.",
+		}},
+		CurrentObservation: agentcontext.ObservationProjection{
+			WorldID:  "world-a",
+			EntityID: "npc:Abigail",
+			State:    map[string]any{"weather": "sunny"},
+		},
+		RecentMemory: []agentcontext.MemoryProjection{{
+			TimeRelation: "today 06:20",
+			Summaries:    []string{"projected memory summary"},
+		}},
+		Tools: []model.ToolDefinition{tool},
+	}
+
+	req, err := renderer.Render(projection)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	assertContainsAll(t, content,
+		"[Recent Memory]",
+		"projected memory summary",
+		"[Current Event]",
+		`"event_id": "projected-event"`,
+		"[Current Event Context Facts]",
+		`"text": "Projected fact."`,
+		"[Current Observation]",
+		`"weather": "sunny"`,
+	)
+}
+
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
@@ -739,37 +794,32 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 	}
 }
 
-func TestRendererMemoryBudgetKeepsLatestRecordWhenSingleRecordExceedsLimit(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 10,
-	})
-
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+func TestRendererRendersProjectedRecentMemory(t *testing.T) {
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	projection := agentcontext.ContextProjection{
 		RuntimePolicy: "policy",
-		Event:         &protocolv1alpha2.GameEvent{EventId: "event-2", EventType: "player_interacted_with_npc"},
-		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
-		RecentMemories: []memory.Record{
-			{MemoryID: "old", Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": "old"}}}},
-			{MemoryID: "latest", Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": strings.Repeat("x", 100)}}}},
+		AgentDescriptor: definition.AgentInstanceDescriptor{
+			SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		},
-	})
-	if err != nil {
-		t.Fatalf("Build returned error: %v", err)
+		CurrentEvent:       agentcontext.EventProjection{EventID: "event-2", EventType: "player_interacted_with_npc"},
+		CurrentObservation: agentcontext.ObservationProjection{WorldID: "world-a", EntityID: "npc:Abigail"},
+		RecentMemory: []agentcontext.MemoryProjection{{
+			TimeRelation: "previous interaction",
+			Summaries:    []string{`tool "speak" arguments {"text":"` + strings.Repeat("x", 100) + `"}`},
+		}},
 	}
 
-	req, err := renderer.Render(agentCtx)
+	req, err := renderer.Render(projection)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
 	content := req.Messages[0].Content
 	if !strings.Contains(content, strings.Repeat("x", 100)) {
-		t.Fatalf("rendered content should keep latest memory even when over limit:\n%s", content)
+		t.Fatalf("rendered content should include projected memory:\n%s", content)
 	}
 	if strings.Contains(content, "old") {
-		t.Fatalf("rendered content should drop older memory first:\n%s", content)
+		t.Fatalf("renderer should not reconstruct raw memory selection:\n%s", content)
 	}
 }
 
