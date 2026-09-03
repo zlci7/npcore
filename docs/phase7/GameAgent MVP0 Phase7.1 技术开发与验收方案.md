@@ -459,6 +459,7 @@ game_id / world_id / entity_id 无法形成 AgentSessionKey
 以下错误启动 fail-fast：
 
 ```text
+已配置的 Definition Catalog root 不存在或无法读取
 已配置的 Definition 文件无法读取
 已配置的 Definition 文件不是合法 JSON
 已配置的 Definition schema_version 不支持
@@ -509,6 +510,7 @@ target EntityRef 中 definition_id 与 entity_id 不同 -> ACCEPTED
 按 game_id + definition_id 加载 Agent Definition
 missing Game Definition fallback
 missing Agent Definition fallback
+configured Definition Catalog root missing fail-fast
 malformed JSON fail-fast
 schema_version unsupported fail-fast
 必填字段缺失 fail-fast

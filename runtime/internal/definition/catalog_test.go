@@ -257,16 +257,13 @@ func TestLoadCatalogFromDirLoadsBundledStardewDefinitions(t *testing.T) {
 	}
 }
 
-func TestLoadCatalogFromDirMissingDirectoryReturnsEmptyCatalog(t *testing.T) {
-	catalog, err := definition.LoadCatalogFromDir(filepath.Join(t.TempDir(), "missing"))
-	if err != nil {
-		t.Fatalf("LoadCatalogFromDir returned error: %v", err)
+func TestLoadCatalogFromDirRejectsMissingConfiguredRoot(t *testing.T) {
+	_, err := definition.LoadCatalogFromDir(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("LoadCatalogFromDir returned nil error, want missing configured root error")
 	}
-	if _, ok := catalog.FindGame("stardew-valley"); ok {
-		t.Fatal("FindGame found a game in empty fallback catalog")
-	}
-	if _, ok := catalog.FindAgent("stardew-valley", "npc:Abigail"); ok {
-		t.Fatal("FindAgent found an agent in empty fallback catalog")
+	if !strings.Contains(err.Error(), "read definition root") {
+		t.Fatalf("error = %v, want read definition root", err)
 	}
 }
 

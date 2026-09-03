@@ -12,9 +12,6 @@ import (
 func LoadCatalogFromDir(root string) (Catalog, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return NewCatalog(nil, nil)
-		}
 		return Catalog{}, fmt.Errorf("read definition root: %w", err)
 	}
 

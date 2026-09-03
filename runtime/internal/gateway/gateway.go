@@ -233,7 +233,7 @@ func (s *Server) dispatchGameEvent(
 		ID:       event.EventId,
 		Admitted: admitted,
 		Run: func(taskCtx context.Context) {
-			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, event, resolved.Target); err != nil {
+			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, resolved.Target, event); err != nil {
 				fmt.Printf("agent loop failed: %s\n", logSafeError(err))
 			}
 		},

@@ -150,14 +150,24 @@ func (l *Loop) HandleEvent(
 	env Environment,
 	conn ConnectionContext,
 	key session.AgentSessionKey,
+	target *protocolv1alpha2.EntityRef,
 	event *protocolv1alpha2.GameEvent,
-	target ...*protocolv1alpha2.EntityRef,
 ) error {
 	if key.EntityID == "" {
 		return fmt.Errorf("agent session entity id is empty")
 	}
 	if key.WorldID == "" {
 		return fmt.Errorf("agent session world id is empty")
+	}
+	if target == nil {
+		return fmt.Errorf("canonical target is required")
+	}
+	targetEntityID := strings.TrimSpace(target.GetEntityId())
+	if targetEntityID == "" {
+		return fmt.Errorf("canonical target entity id is empty")
+	}
+	if targetEntityID != key.EntityID {
+		return fmt.Errorf("target entity id %q does not match agent session entity id %q", targetEntityID, key.EntityID)
 	}
 	ctx, cancelTurn := context.WithTimeout(ctx, l.config.TurnTimeout)
 	defer cancelTurn()
@@ -186,18 +196,9 @@ func (l *Loop) HandleEvent(
 	}
 	turnTracer.Emit(trace.EventObservationReceived, trace.EventData{})
 
-	descriptor := definition.NewAgentInstanceDescriptor(key, firstTarget(target))
+	descriptor := definition.NewAgentInstanceDescriptor(key, target)
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
 	return l.runBoundedSteps(ctx, env, key, descriptor, event, obs, recentMemories, turnID, turnTracer)
-}
-
-func firstTarget(targets []*protocolv1alpha2.EntityRef) *protocolv1alpha2.EntityRef {
-	for _, target := range targets {
-		if target != nil {
-			return target
-		}
-	}
-	return nil
 }
 
 func (l *Loop) runBoundedSteps(

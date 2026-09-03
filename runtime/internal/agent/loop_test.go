@@ -210,10 +210,10 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 		TargetEntityId: key.EntityID,
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, first); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), first); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, second); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), second); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *t
 		DefinitionId: "villager/farmer",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, event, target); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, target, event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -308,6 +308,60 @@ func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *t
 		"display_name: Alpha",
 		"definition_id: villager/farmer",
 	)
+}
+
+func TestHandleEventRejectsMissingCanonicalTarget(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "done"},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, nil, gameEvent("event_1", key))
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want missing canonical target error")
+	}
+	if !strings.Contains(err.Error(), "canonical target") {
+		t.Fatalf("error = %v, want canonical target", err)
+	}
+}
+
+func TestHandleEventRejectsCanonicalTargetEntityMismatch(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "done"},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
+	target := &protocolv1alpha2.EntityRef{
+		EntityId:     "creature:beta",
+		EntityType:   "creature",
+		DisplayName:  "Beta",
+		DefinitionId: "villager/farmer",
+	}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, target, gameEvent("event_1", key))
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want target mismatch error")
+	}
+	if !strings.Contains(err.Error(), "target entity id") {
+		t.Fatalf("error = %v, want target entity id", err)
+	}
 }
 
 func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) {
@@ -354,10 +408,10 @@ func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) 
 		DefinitionId: "villager/farmer",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, gameEvent("event_alpha", alphaKey), alphaTarget); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha", alphaKey)); err != nil {
 		t.Fatalf("alpha HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, gameEvent("event_beta", betaKey), betaTarget); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, gameEvent("event_beta", betaKey)); err != nil {
 		t.Fatalf("beta HandleEvent returned error: %v", err)
 	}
 
@@ -389,6 +443,90 @@ func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) 
 		if strings.Contains(betaContent, unwanted) {
 			t.Fatalf("beta request should not contain alpha scope %q:\n%s", unwanted, betaContent)
 		}
+	}
+}
+
+func TestHandleEventKeepsMemoryScopeSeparateForSharedDefinition(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{
+						ID:        "call_alpha_1",
+						Name:      "speak",
+						Arguments: map[string]any{"text": "alpha-only-memory"},
+					}},
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	catalog, err := definition.NewCatalog(
+		[]definition.GameDefinition{{
+			SchemaVersion: definition.SchemaVersionV1Alpha1,
+			GameID:        "fake-game",
+			Title:         "Fake Game",
+		}},
+		[]definition.AgentDefinition{{
+			SchemaVersion: definition.SchemaVersionV1Alpha1,
+			GameID:        "fake-game",
+			DefinitionID:  "villager/farmer",
+			Identity:      "A reusable farmer archetype.",
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewCatalog returned error: %v", err)
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	alphaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:shared", EntityID: "creature:alpha"}
+	betaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:shared", EntityID: "creature:beta"}
+	alphaTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     alphaKey.EntityID,
+		EntityType:   "creature",
+		DisplayName:  "Alpha",
+		DefinitionId: "villager/farmer",
+	}
+	betaTarget := &protocolv1alpha2.EntityRef{
+		EntityId:     betaKey.EntityID,
+		EntityType:   "creature",
+		DisplayName:  "Beta",
+		DefinitionId: "villager/farmer",
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha_1", alphaKey)); err != nil {
+		t.Fatalf("first alpha HandleEvent returned error: %v", err)
+	}
+	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, gameEvent("event_beta_1", betaKey)); err != nil {
+		t.Fatalf("beta HandleEvent returned error: %v", err)
+	}
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha_2", alphaKey)); err != nil {
+		t.Fatalf("second alpha HandleEvent returned error: %v", err)
+	}
+
+	if len(provider.requests) != 3 {
+		t.Fatalf("provider request count = %d, want 3", len(provider.requests))
+	}
+	betaContent := provider.requests[1].Messages[0].Content
+	if strings.Contains(betaContent, "alpha-only-memory") {
+		t.Fatalf("beta request should not contain alpha memory:\n%s", betaContent)
+	}
+	secondAlphaContent := provider.requests[2].Messages[0].Content
+	if !strings.Contains(secondAlphaContent, "alpha-only-memory") {
+		t.Fatalf("second alpha request missing alpha memory:\n%s", secondAlphaContent)
 	}
 }
 
@@ -424,10 +562,10 @@ func TestHandleEventRendersDifferentBundledStardewDefinitions(t *testing.T) {
 		DefinitionId: "npc:Linus",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, abigailKey, gameEvent("event_abigail", abigailKey), abigailTarget); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, abigailKey, abigailTarget, gameEvent("event_abigail", abigailKey)); err != nil {
 		t.Fatalf("Abigail HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, linusKey, gameEvent("event_linus", linusKey), linusTarget); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, linusKey, linusTarget, gameEvent("event_linus", linusKey)); err != nil {
 		t.Fatalf("Linus HandleEvent returned error: %v", err)
 	}
 
@@ -475,7 +613,7 @@ func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
 	for i := 1; i <= 26; i++ {
-		if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent(fmt.Sprintf("event_%02d", i), key)); err != nil {
+		if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent(fmt.Sprintf("event_%02d", i), key)); err != nil {
 			t.Fatalf("HandleEvent(%d) returned error: %v", i, err)
 		}
 	}
@@ -500,10 +638,10 @@ func TestHandleEventSkipsMemoryWhenDisabled(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_2", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_2", key)); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -527,10 +665,10 @@ func TestWithMemoryStoreNilDoesNotDisableDefaultMemoryStore(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_2", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_2", key)); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -553,7 +691,7 @@ func TestHandleEventFailOpenWhenMemoryLoadFails(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -577,7 +715,7 @@ func TestHandleEventCompletesWhenMemoryAppendFails(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -594,7 +732,7 @@ func TestHandleEventCompletesWhenMemoryProjectionFails(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -850,6 +988,13 @@ func gameEvent(eventID string, key session.AgentSessionKey) *protocolv1alpha2.Ga
 	}
 }
 
+func entityTarget(key session.AgentSessionKey) *protocolv1alpha2.EntityRef {
+	return &protocolv1alpha2.EntityRef{
+		EntityId:     key.EntityID,
+		DefinitionId: key.EntityID,
+	}
+}
+
 func playerUtteranceEvent(eventID string, key session.AgentSessionKey, sequence uint64, text string) *protocolv1alpha2.GameEvent {
 	event := gameEvent(eventID, key)
 	event.EventType = "player_said_to_npc"
@@ -1066,7 +1211,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		EntityID: event.TargetEntityId,
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, event); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1159,7 +1304,7 @@ func TestHandleEventExecutesSingleToolCallFromModelDecision(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1188,7 +1333,7 @@ func TestHandleEventCompletesOnSettleOnlyDecision(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1211,7 +1356,7 @@ func TestHandleEventSendsTurnCompletionOnSettle(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1240,7 +1385,7 @@ func TestHandleEventSendsTurnCompletionOnFailure(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil {
 		t.Fatal("HandleEvent returned nil error, want invalid model response")
 	}
@@ -1270,7 +1415,7 @@ func TestTurnCompletionSendFailureDoesNotChangeCompletedTurnStatus(t *testing.T)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1299,7 +1444,7 @@ func TestHandleEventActionRequestCarriesSourceCorrelation(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1334,7 +1479,7 @@ func TestHandleEventWritesContextFactMemoryOnSettleOnlyDecision(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Let's go fishing."))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Let's go fishing."))
 	if err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
@@ -1377,7 +1522,7 @@ func TestHandleEventRunsBatchToolCallsThenSettle(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 2 {
@@ -1421,7 +1566,7 @@ func TestHandleEventRejectsExclusivePolicyToolMixedWithOtherToolCalls(t *testing
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
@@ -1471,7 +1616,7 @@ func TestHandleEventSettlesAfterSuccessfulPolicyToolWithoutNextModelRequest(t *t
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
@@ -1512,7 +1657,7 @@ func TestHandleEventSuspendsResumesAndReobservesAfterAsyncAction(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1590,7 +1735,7 @@ func TestHandleEventAsyncSuccessContinuesToResumeStepBeforeSettling(t *testing.T
 			conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 			key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-			if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 				t.Fatalf("HandleEvent returned error: %v", err)
 			}
 
@@ -1646,7 +1791,7 @@ func TestHandleEventRejectsSecondAsyncActionPerTurn(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1689,7 +1834,7 @@ func TestHandleEventFailsTurnWhenReobserveFailsAfterAsyncSuccess(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "adapter observe closed") {
 		t.Fatalf("HandleEvent error = %v, want re-observe failure", err)
 	}
@@ -1749,7 +1894,7 @@ func TestHandleEventAsyncTerminalFailureFeedsNextStep(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1788,7 +1933,7 @@ func TestHandleEventRunsMultipleStepsUntilSettle(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1842,7 +1987,7 @@ func TestHandleEventRejectsToolCallIDReusedAcrossSteps(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1879,7 +2024,7 @@ func TestHandleEventFailsWhenMaxStepsExceeded(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -1910,7 +2055,7 @@ func TestHandleEventFailsWhenMaxToolCallsPerStepExceeded(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max tool calls per step exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max tool calls per step exceeded", err)
 	}
@@ -1939,7 +2084,7 @@ func TestHandleEventFailsWhenMaxToolCallsPerTurnExceeded(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max tool calls per turn exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max tool calls per turn exceeded", err)
 	}
@@ -1961,7 +2106,7 @@ func TestHandleEventTurnTimeoutCanPreemptBudgetsWithDelayedProvider(t *testing.T
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("HandleEvent error = %v, want context deadline exceeded", err)
 	}
@@ -1984,7 +2129,7 @@ func TestFailedMultiStepTurnDoesNotAppendMemory(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -2009,7 +2154,7 @@ func TestFailedTurnWithContextFactDoesNotAppendMemory(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Will this be remembered?"))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Will this be remembered?"))
 	if err == nil || !strings.Contains(err.Error(), "continue control requires tool calls") {
 		t.Fatalf("HandleEvent error = %v, want invalid continue without tool calls", err)
 	}
@@ -2047,7 +2192,7 @@ func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Remember my request."))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Remember my request."))
 	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
 		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
 	}
@@ -2094,7 +2239,7 @@ func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
 		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
 	}
@@ -2139,7 +2284,7 @@ func TestCompletedTurnAfterRejectedActionWritesOnlySuccessfulOutcomes(t *testing
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(store.appended); got != 1 {
@@ -2174,7 +2319,7 @@ func TestHandleEventRetriesAfterInvalidToolCallBatchWithinStepBudget(t *testing.
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 0 {
@@ -2210,7 +2355,7 @@ func TestHandleEventRetriesAfterActionResultTerminalFailure(t *testing.T) {
 			conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 			key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-			if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 				t.Fatalf("HandleEvent returned error: %v", err)
 			}
 			if got := len(provider.requests); got != 2 {
@@ -2240,7 +2385,7 @@ func TestHandleEventDoesNotSettleAfterFailedBatchEvenWhenControlSettleRequested(
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(provider.requests); got != 2 {
@@ -2267,7 +2412,7 @@ func TestHandleEventFailsWhenFailureLoopExhaustsMaxSteps(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -2291,7 +2436,7 @@ func TestMultiStepTraceEventsShareTurnIDAndIncreaseStepIndex(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2326,7 +2471,7 @@ func TestToolBatchTraceFieldsIncludeCallCountAndConcurrency(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2357,7 +2502,7 @@ func TestMultiStepTerminalEventIsUniqueAndLast(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2388,7 +2533,7 @@ func TestMaxStepsTraceFailureReason(t *testing.T) {
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	_ = loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	_ = loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
 
 	terminal := recorder.events[len(recorder.events)-1]
 	if terminal.Event != trace.EventTurnFailed || terminal.Reason != "max_steps_exceeded" {
