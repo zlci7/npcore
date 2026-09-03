@@ -510,8 +510,9 @@ target EntityRef 中 definition_id 与 entity_id 不同 -> ACCEPTED
 missing Game Definition fallback
 missing Agent Definition fallback
 malformed JSON fail-fast
+schema_version unsupported fail-fast
 必填字段缺失 fail-fast
-scope mismatch fail-fast
+configured Definition scope mismatch startup fail-fast
 重复 game_id fail-fast
 重复 game_id + definition_id fail-fast
 ```
@@ -523,7 +524,7 @@ scope mismatch fail-fast
 ```text
 Agent Instance Descriptor 包含 game_id / world_id / entity_id / entity_type / display_name / definition_id
 definition_id != entity_id 时，模型输入使用 definition_id 加载出的 Agent Definition
-多个 entity 共享 definition_id 时，Descriptor 不混淆 entity_id 和 session_key
+多个 entity 共享 definition_id 时，Descriptor 不混淆 entity_id 和 AgentSessionKey
 fallback 时 Renderer 不输出伪造 Definition
 Current Observation 仍然优先于 Recent Memory
 ```
