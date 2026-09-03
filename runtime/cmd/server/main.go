@@ -13,7 +13,6 @@ import (
 	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/gateway"
 	"gameagent/runtime/internal/llm"
-	"gameagent/runtime/internal/tool"
 	"gameagent/runtime/internal/trace"
 
 	"google.golang.org/grpc"
@@ -25,8 +24,6 @@ func main() {
 		log.Fatalf("load model provider failed: %v", err)
 	}
 	log.Printf("GameAgent model provider: %s model=%s", modelConfig.Provider, modelConfig.Model)
-
-	toolRegistry := tool.NewRegistry()
 
 	// 初始化 trace recorder。
 	var traceRecorder trace.Recorder
@@ -62,9 +59,9 @@ func main() {
 		log.Printf("GameAgent definition catalog root: %s", agentConfig.DefinitionCatalogRoot)
 	}
 
-	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder, agentConfig, agent.WithDefinitionCatalog(definitionCatalog))
+	agentLoop := agent.NewLoop(modelProvider, traceRecorder, agentConfig, agent.WithDefinitionCatalog(definitionCatalog))
 
-	gatewayServer := gateway.NewServer(agentLoop, toolRegistry)
+	gatewayServer := gateway.NewServer(agentLoop)
 
 	grpcServer := grpc.NewServer()
 	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, gatewayServer)

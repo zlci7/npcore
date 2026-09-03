@@ -337,7 +337,7 @@ func TestSchedulerRunsSequentialCallsSerially(t *testing.T) {
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "speak", "first"),
@@ -365,7 +365,7 @@ func TestSchedulerRunsParallelSafeGroupWithBoundedConcurrency(t *testing.T) {
 		"c": 30 * time.Millisecond,
 		"d": 30 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_a", "sense", "a"),
@@ -397,7 +397,7 @@ func TestSchedulerUsesSequentialCallAsOrderingBarrier(t *testing.T) {
 		"d": 5 * time.Millisecond,
 		"e": 5 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_a", "sense", "a"),
@@ -428,7 +428,7 @@ func TestSchedulerReturnsResultsInOriginalToolCallOrder(t *testing.T) {
 		"fast":   1 * time.Millisecond,
 		"medium": 10 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 3, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 3, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_slow", "sense", "slow"),
@@ -451,7 +451,7 @@ func TestSchedulerDoesNotExecuteWhenBatchValidationFails(t *testing.T) {
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "speak", "first"),
@@ -466,13 +466,38 @@ func TestSchedulerDoesNotExecuteWhenBatchValidationFails(t *testing.T) {
 	}
 }
 
+func TestSchedulerUsesTurnToolViewForLookup(t *testing.T) {
+	view := schedulerToolView(t,
+		schedulerCapability("speak", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{view: view, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_1", "speak", "first"),
+		{ID: "call_2", Name: "missing", Arguments: map[string]any{"text": "second"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	if got, want := len(outcome.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	assertToolResult(t, outcome.Results[0], "call_1", "speak", "skipped", "batch_validation_failed")
+	assertToolResult(t, outcome.Results[1], "call_2", "missing", "invalid", "tool_not_registered")
+}
+
 func TestSchedulerProducesOneToolResultPerToolCallWhenBatchValidationFails(t *testing.T) {
 	registry := schedulerRegistry(
 		schedulerCapability("speak", tool.ConcurrencySequential),
 		schedulerCapability("emote", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "speak", "first"),
@@ -500,7 +525,7 @@ func TestSchedulerRejectsExclusivePolicyToolMixedBatchBeforeExecution(t *testing
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "ask_player", "question"),
@@ -528,7 +553,7 @@ func TestSchedulerPreflightsBuildActionRequestBeforeAnyExecution(t *testing.T) {
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "speak", "first"),
@@ -552,7 +577,7 @@ func TestSchedulerRejectsDuplicateToolCallIDsDuringPreflight(t *testing.T) {
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_1", "speak", "first"),
@@ -578,7 +603,7 @@ func TestSchedulerValidatesArgumentsAgainstInputSchemaBeforeExecution(t *testing
 		`{"type":"object","properties":{"mood":{"type":"string","enum":["happy","sad"]}},"required":["mood"],"additionalProperties":false}`,
 	))
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		{ID: "call_bad", Name: "speak", Arguments: map[string]any{"mood": "angry"}},
@@ -611,7 +636,7 @@ func TestSchedulerSkipsLaterGroupsAfterPriorGroupFailure(t *testing.T) {
 			"fail": {Code: "adapter_failed", Message: "adapter rejected action"},
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_a", "sense", "a"),
@@ -645,7 +670,7 @@ func TestSchedulerDrainsParallelGroupBeforeSkippingLaterGroupsOnModelVisibleFail
 			"failed": protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED,
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_success", "sense", "success"),
@@ -681,7 +706,7 @@ func TestSchedulerReturnsCompletedSiblingActionsBeforeParallelTechnicalError(t *
 			"fatal": errors.New("adapter transport closed"),
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_success", "sense", "success"),
@@ -710,7 +735,7 @@ func TestSchedulerReturnsCompletedActionsBeforeSequentialTechnicalError(t *testi
 			"fatal": errors.New("adapter transport closed"),
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_success", "sense", "success"),
@@ -743,7 +768,7 @@ func TestSchedulerDrainsStartedWorkersBeforeTechnicalFailureTerminal(t *testing.
 			"fatal": errors.New("adapter transport closed"),
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_fatal", "sense", "fatal"),
@@ -801,7 +826,7 @@ func TestSchedulerFailsOnNonTerminalActionStatus(t *testing.T) {
 			"pending": protocolv1alpha2.ActionStatus_ACTION_STATUS_PENDING,
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_pending", "speak", "pending"),
@@ -823,7 +848,7 @@ func TestSchedulerHonorsMaxParallelToolCalls(t *testing.T) {
 		"b": 15 * time.Millisecond,
 		"c": 15 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 1, actionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, maxParallelToolCalls: 1, actionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_a", "sense", "a"),
@@ -846,7 +871,7 @@ func TestSchedulerStartsAndWaitsForSingleAsyncAction(t *testing.T) {
 	env := &schedulerTestEnvironment{}
 	var statusUpdates []string
 	scheduler := toolBatchScheduler{
-		registry:           registry,
+		view:               registry,
 		actionStartTimeout: time.Second,
 		asyncActionTimeout: time.Second,
 		sourceEventID:      "event_1",
@@ -889,7 +914,7 @@ func TestSchedulerAsyncSuccessHonorsSettleAfterSuccessPolicy(t *testing.T) {
 		schedulerAsyncCapabilityWithPolicy("move_to", tool.ConcurrencySequential, tool.ToolPolicy{SettleAfterSuccess: true}),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "destination"),
@@ -909,7 +934,7 @@ func TestSchedulerRejectsAsyncMixedBatchBeforeExecution(t *testing.T) {
 		schedulerCapability("speak", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "destination"),
@@ -934,7 +959,7 @@ func TestSchedulerRejectsMultipleAsyncCallsBeforeExecution(t *testing.T) {
 		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_a", "move_to", "a"),
@@ -966,7 +991,7 @@ func TestSchedulerAsyncTerminalFailureIsModelVisible(t *testing.T) {
 			"blocked": {Code: "path_blocked", Message: "path is blocked"},
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "blocked"),
@@ -993,7 +1018,7 @@ func TestSchedulerAsyncFastTerminalStartResult(t *testing.T) {
 			"already_there": protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
 		},
 	}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "already_there"),
@@ -1011,7 +1036,7 @@ func TestSchedulerAsyncLimitRunsAfterPreflight(t *testing.T) {
 		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, asyncActionLimitFull: true}
+	scheduler := toolBatchScheduler{view: registry, asyncActionLimitFull: true}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		{ID: "call_move", Name: "move_to"},
@@ -1031,7 +1056,7 @@ func TestSchedulerAsyncLimitRejectsExecutableAsyncCallBeforeExecution(t *testing
 		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
 	)
 	env := &schedulerTestEnvironment{}
-	scheduler := toolBatchScheduler{registry: registry, asyncActionLimitFull: true}
+	scheduler := toolBatchScheduler{view: registry, asyncActionLimitFull: true}
 
 	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "destination"),
@@ -1056,7 +1081,7 @@ func TestSchedulerAsyncStartTimeoutCancelsAction(t *testing.T) {
 	env := &schedulerTestEnvironment{startDelays: map[string]time.Duration{
 		"slow_start": 50 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: 5 * time.Millisecond, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: 5 * time.Millisecond, asyncActionTimeout: time.Second}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "slow_start"),
@@ -1075,7 +1100,7 @@ func TestSchedulerAsyncWaitTimeoutCancelsAction(t *testing.T) {
 	env := &schedulerTestEnvironment{waitDelays: map[string]time.Duration{
 		"slow_wait": 50 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: 5 * time.Millisecond}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: 5 * time.Millisecond}
 
 	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
 		schedulerCall("call_move", "move_to", "slow_wait"),
@@ -1094,7 +1119,7 @@ func TestSchedulerTurnTimeoutCancelsPendingAsyncAction(t *testing.T) {
 	env := &schedulerTestEnvironment{waitDelays: map[string]time.Duration{
 		"slow_wait": 50 * time.Millisecond,
 	}}
-	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	scheduler := toolBatchScheduler{view: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 
@@ -1108,10 +1133,26 @@ func TestSchedulerTurnTimeoutCancelsPendingAsyncAction(t *testing.T) {
 	assertCancelledWithReason(t, env.cancelledActions(), "async_action_timeout")
 }
 
-func schedulerRegistry(capabilities ...*protocolv1alpha2.Capability) *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities(capabilities)
-	return registry
+func schedulerRegistry(capabilities ...*protocolv1alpha2.Capability) tool.TurnToolView {
+	catalog, _, err := tool.BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return catalog.Snapshot()
+}
+
+func schedulerToolView(t *testing.T, capabilities ...*protocolv1alpha2.Capability) tool.TurnToolView {
+	t.Helper()
+
+	catalog, _, err := tool.BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		t.Fatalf("BuildEnvironmentToolCatalog returned error: %v", err)
+	}
+	return catalog.Snapshot()
 }
 
 func schedulerCapability(name string, concurrency tool.ConcurrencyMode) *protocolv1alpha2.Capability {

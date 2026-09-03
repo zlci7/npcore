@@ -20,13 +20,11 @@ type Server struct {
 	protocolv1alpha2.UnimplementedGameAgentGatewayServer
 
 	agentLoop *agent.Loop
-	tools     *tool.Registry
 }
 
-func NewServer(agentLoop *agent.Loop, tools *tool.Registry) *Server {
+func NewServer(agentLoop *agent.Loop) *Server {
 	return &Server{
 		agentLoop: agentLoop,
-		tools:     tools,
 	}
 }
 
@@ -91,7 +89,11 @@ func (s *Server) Connect(stream protocolv1alpha2.GameAgentGateway_ConnectServer)
 		return fmt.Errorf("expected capability list")
 	}
 
-	s.tools.RegisterEnvironmentCapabilities(capabilityList.Capabilities)
+	catalog, diagnostics, err := tool.BuildEnvironmentToolCatalog(capabilityList)
+	logCapabilityBootstrapDiagnostics(hello.SessionId, diagnostics)
+	if err != nil {
+		return err
+	}
 
 	env := newStreamEnvironment(stream)
 	laneStore, err := session.NewLaneStore(stream.Context(), session.DefaultQueueSize)
@@ -119,7 +121,7 @@ func (s *Server) Connect(stream protocolv1alpha2.GameAgentGateway_ConnectServer)
 			if payload.Event == nil {
 				continue
 			}
-			if err := s.dispatchGameEvent(env, laneStore, seenEventIDs, conn, msg.MessageId, payload.Event); err != nil {
+			if err := s.dispatchGameEvent(env, laneStore, seenEventIDs, conn, catalog, msg.MessageId, payload.Event); err != nil {
 				return err
 			}
 
@@ -167,6 +169,7 @@ func (s *Server) dispatchGameEvent(
 	laneStore *session.LaneStore,
 	seenEventIDs map[string]struct{},
 	conn agent.ConnectionContext,
+	catalog *tool.EnvironmentToolCatalog,
 	messageID string,
 	event *protocolv1alpha2.GameEvent,
 ) error {
@@ -233,7 +236,7 @@ func (s *Server) dispatchGameEvent(
 		ID:       event.EventId,
 		Admitted: admitted,
 		Run: func(taskCtx context.Context) {
-			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, resolved.Target, event); err != nil {
+			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, resolved.Target, catalog, event); err != nil {
 				fmt.Printf("agent loop failed: %s\n", logSafeError(err))
 			}
 		},
@@ -281,6 +284,23 @@ func (s *Server) dispatchGameEvent(
 	seenEventIDs[event.EventId] = struct{}{}
 	close(admitted)
 	return nil
+}
+
+func logCapabilityBootstrapDiagnostics(sessionID string, diagnostics tool.BootstrapDiagnostics) {
+	log.Printf(
+		"capability bootstrap session_id=%s revision=%d accepted=%d catalog=%d skipped_nil=%d invalid_names=%v invalid_schema=%v invalid_policy=%v duplicates=%v unsupported_entity_id=%q invalid_entity_id=%q",
+		sessionID,
+		diagnostics.CapabilityRevision,
+		diagnostics.AcceptedToolCount,
+		diagnostics.CatalogToolCount,
+		diagnostics.SkippedNilCapabilityCount,
+		diagnostics.InvalidToolNames,
+		diagnostics.SkippedInvalidSchemaNames,
+		diagnostics.SkippedInvalidToolPolicyNames,
+		diagnostics.DuplicateToolNames,
+		diagnostics.UnsupportedEntityID,
+		diagnostics.InvalidEntityID,
+	)
 }
 
 func logSafeError(err error) string {

@@ -17,7 +17,6 @@ import (
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/model"
-	"gameagent/runtime/internal/tool"
 	"gameagent/runtime/internal/trace"
 
 	"google.golang.org/grpc"
@@ -132,9 +131,8 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -189,7 +187,6 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	timeline(t, "adapter -> GameEvent(player_interacted_with_npc)")
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
@@ -279,15 +276,75 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	}
 }
 
+func TestConnectRejectsIllegalCapabilityListEntityScope(t *testing.T) {
+	tests := []struct {
+		name     string
+		entityID string
+		wantErr  string
+	}{
+		{
+			name:     "entity scoped capability list",
+			entityID: "npc:Abigail",
+			wantErr:  "unsupported entity scope",
+		},
+		{
+			name:     "whitespace entity scope",
+			entityID: " \t ",
+			wantErr:  "invalid entity scope",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			listener := bufconn.Listen(1024 * 1024)
+			grpcServer := grpc.NewServer()
+			provider := &scriptedGatewayProvider{}
+			loop := agent.NewLoop(provider, trace.NoopRecorder{}, agent.DefaultConfig())
+			protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
+			startGatewayServer(t, grpcServer, listener)
+
+			conn := dialGateway(t, ctx, listener)
+			defer conn.Close()
+
+			client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+			stream, err := client.Connect(ctx)
+			if err != nil {
+				t.Fatalf("Connect returned error: %v", err)
+			}
+			if err := stream.Send(adapterHelloMessage()); err != nil {
+				t.Fatalf("send hello: %v", err)
+			}
+			_ = recvRuntimeMessage(t, stream)
+			capabilityRequest := recvRuntimeMessage(t, stream)
+
+			if err := stream.Send(capabilityListWithEntityIDMessage(capabilityRequest.MessageId, tt.entityID)); err != nil {
+				t.Fatalf("send capability list: %v", err)
+			}
+			_, err = stream.Recv()
+			if err == nil {
+				t.Fatal("stream.Recv returned nil error, want bootstrap failure")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("stream.Recv error = %v, want containing %q", err, tt.wantErr)
+			}
+			if got := len(provider.Requests()); got != 0 {
+				t.Fatalf("provider request count = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -342,7 +399,6 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	if err := stream.Send(capabilityListWithEmoteMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "emote")
 
 	timeline(t, "adapter -> GameEvent(player_interacted_with_npc)")
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
@@ -427,7 +483,6 @@ func TestConnectSettlesAfterPresentDialogueAndPreservesSourceCorrelation(t *test
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{{
 		Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{{
@@ -439,15 +494,15 @@ func TestConnectSettlesAfterPresentDialogueAndPreservesSourceCorrelation(t *test
 		},
 	}}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-present-dialogue", capabilityListWithPresentDialogueMessage)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, "session:test-present-dialogue", capabilityListWithPresentDialogueMessage)
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -493,7 +548,6 @@ func TestConnectRunsAsyncMoveToSuspendResumeTurnLifecycle(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{
 		{
 			Decision: model.ModelDecision{
@@ -515,15 +569,15 @@ func TestConnectRunsAsyncMoveToSuspendResumeTurnLifecycle(t *testing.T) {
 		},
 	}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-move-to", capabilityListWithMoveToMessage)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, "session:test-move-to", capabilityListWithMoveToMessage)
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -594,7 +648,6 @@ func TestConnectRunsSingleStepBatchWithTwoActionsAndSettle(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{{
 		Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{
@@ -605,15 +658,15 @@ func TestConnectRunsSingleStepBatchWithTwoActionsAndSettle(t *testing.T) {
 		},
 	}}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-batch", capabilityListWithEmoteMessage)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, "session:test-batch", capabilityListWithEmoteMessage)
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -657,7 +710,6 @@ func TestConnectRunsParallelSafeBatchAndOrdersTranscriptByToolCallOrder(t *testi
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{
@@ -669,15 +721,15 @@ func TestConnectRunsParallelSafeBatchAndOrdersTranscriptByToolCallOrder(t *testi
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 	}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-parallel", capabilityListWithParallelSenseMessage)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, "session:test-parallel", capabilityListWithParallelSenseMessage)
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -721,7 +773,6 @@ func TestConnectRunsMultiStepForNonStardewTriggerWithDefinitionID(t *testing.T) 
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "growl"}}},
@@ -730,15 +781,15 @@ func TestConnectRunsMultiStepForNonStardewTriggerWithDefinitionID(t *testing.T) 
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 	}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStream(t, ctx, client, registry, "session:test-survival")
+	stream := connectReadyStream(t, ctx, client, "session:test-survival")
 
 	if err := stream.Send(gameEventMessageForEntityDefinition(1, "damage_received", "creature:alpha", "creature/generic", "creature", "Alpha")); err != nil {
 		t.Fatalf("send non-stardew event: %v", err)
@@ -778,7 +829,6 @@ func TestConnectRetriesAfterRejectedActionResult(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "blocked"}}},
@@ -787,15 +837,15 @@ func TestConnectRetriesAfterRejectedActionResult(t *testing.T) {
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 	}}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStream(t, ctx, client, registry, "session:test-retry")
+	stream := connectReadyStream(t, ctx, client, "session:test-retry")
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -829,7 +879,6 @@ func TestConnectMaxStepsExceededProducesSingleTerminalTrace(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &scriptedGatewayProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{
 			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "loop"}}},
@@ -839,15 +888,15 @@ func TestConnectMaxStepsExceededProducesSingleTerminalTrace(t *testing.T) {
 	recorder := &recordingGatewayTraceRecorder{}
 	config := agent.DefaultConfig()
 	config.MaxSteps = 1
-	loop := agent.NewLoop(provider, registry, recorder, config)
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, config)
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 	startGatewayServer(t, grpcServer, listener)
 
 	conn := dialGateway(t, ctx, listener)
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStream(t, ctx, client, registry, "session:test-max-steps")
+	stream := connectReadyStream(t, ctx, client, "session:test-max-steps")
 
 	if err := stream.Send(npcInteractionEventMessage()); err != nil {
 		t.Fatalf("send game event: %v", err)
@@ -892,9 +941,8 @@ func TestConnectRejectsGameEventWhenEventQueueIsFull(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -936,7 +984,6 @@ func TestConnectRejectsGameEventWhenEventQueueIsFull(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	const eventCount = 25
 	for i := 0; i < eventCount; i++ {
@@ -978,9 +1025,8 @@ func TestConnectRoutesDifferentNPCsToIndependentLanes(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1022,7 +1068,6 @@ func TestConnectRoutesDifferentNPCsToIndependentLanes(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	if err := stream.Send(npcInteractionEventMessageForNPC(1, "npc:Linus", "Linus")); err != nil {
 		t.Fatalf("send linus event: %v", err)
@@ -1059,9 +1104,8 @@ func TestConnectAcceptsNonStardewTriggerWithRoutedEntity(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1090,7 +1134,7 @@ func TestConnectAcceptsNonStardewTriggerWithRoutedEntity(t *testing.T) {
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStream(t, ctx, client, registry, "session:test-survival")
+	stream := connectReadyStream(t, ctx, client, "session:test-survival")
 
 	if err := stream.Send(gameEventMessageForEntity(1, "damage_received", "creature:alpha", "creature", "Alpha")); err != nil {
 		t.Fatalf("send non-stardew event: %v", err)
@@ -1136,9 +1180,8 @@ func TestConnectSerializesEventsForSameNPC(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1180,7 +1223,6 @@ func TestConnectSerializesEventsForSameNPC(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	if err := stream.Send(npcInteractionEventMessageWithIDs(1)); err != nil {
 		t.Fatalf("send first event: %v", err)
@@ -1242,11 +1284,10 @@ func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &recordingGatewayProvider{}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1288,7 +1329,6 @@ func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	if err := stream.Send(npcInteractionEventMessageWithIDs(1)); err != nil {
 		t.Fatalf("send first event: %v", err)
@@ -1370,11 +1410,10 @@ func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &recordingGatewayProvider{}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1403,7 +1442,7 @@ func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	firstStream := connectReadyStream(t, ctx, client, registry, "session:first")
+	firstStream := connectReadyStream(t, ctx, client, "session:first")
 	runSuccessfulNPCInteraction(t, firstStream, 1, "npc:Linus", "Linus")
 	waitForTraceEventCount(t, recorder, trace.EventContextUpdated, 1)
 	if err := firstStream.CloseSend(); err != nil {
@@ -1413,7 +1452,7 @@ func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
 		t.Fatalf("first stream final recv error = %v, want EOF", err)
 	}
 
-	secondStream := connectReadyStream(t, ctx, client, registry, "session:second")
+	secondStream := connectReadyStream(t, ctx, client, "session:second")
 	secondObserveMessage := sendAcceptedNPCEvent(t, secondStream, 2, "npc:Linus", "Linus")
 	if err := secondStream.Send(observationMessageForNPC(secondObserveMessage.MessageId, "npc:Linus", "Linus")); err != nil {
 		t.Fatalf("send second observation: %v", err)
@@ -1449,11 +1488,10 @@ func TestConnectDoesNotLeakMemoryAcrossNPCs(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
 	provider := &recordingGatewayProvider{}
 	recorder := &recordingGatewayTraceRecorder{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1482,7 +1520,7 @@ func TestConnectDoesNotLeakMemoryAcrossNPCs(t *testing.T) {
 	defer conn.Close()
 
 	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
-	stream := connectReadyStream(t, ctx, client, registry, "session:test")
+	stream := connectReadyStream(t, ctx, client, "session:test")
 
 	runSuccessfulNPCInteraction(t, stream, 1, "npc:Abigail", "Abigail")
 	waitForTraceEventCount(t, recorder, trace.EventContextUpdated, 1)
@@ -1520,9 +1558,8 @@ func TestConnectDrainsQueuedEventOnDisconnect(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1564,7 +1601,6 @@ func TestConnectDrainsQueuedEventOnDisconnect(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	if err := stream.Send(npcInteractionEventMessageWithIDs(1)); err != nil {
 		t.Fatalf("send first event: %v", err)
@@ -1608,9 +1644,8 @@ func TestConnectReturnsDuplicateAckForRepeatedEventID(t *testing.T) {
 
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
-	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
-	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	loop := agent.NewLoop(fake.NewProvider(), trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -1652,7 +1687,6 @@ func TestConnectReturnsDuplicateAckForRepeatedEventID(t *testing.T) {
 	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
 
 	first := npcInteractionEventMessageWithIDs(1)
 	if err := stream.Send(first); err != nil {
@@ -1779,26 +1813,6 @@ func recvRuntimeMessageWithin(t *testing.T, stream protocolv1alpha2.GameAgentGat
 	}
 }
 
-func waitForTool(t *testing.T, registry *tool.Registry, name string) {
-	t.Helper()
-
-	deadline := time.After(time.Second)
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-
-	for {
-		if registry.HasTool(name) {
-			return
-		}
-
-		select {
-		case <-deadline:
-			t.Fatalf("expected %q capability to be registered", name)
-		case <-tick.C:
-		}
-	}
-}
-
 func waitForTraceEventCount(t *testing.T, recorder *recordingGatewayTraceRecorder, eventName trace.EventName, want int) {
 	t.Helper()
 
@@ -1886,17 +1900,15 @@ func connectReadyStream(
 	t *testing.T,
 	ctx context.Context,
 	client protocolv1alpha2.GameAgentGatewayClient,
-	registry *tool.Registry,
 	sessionID string,
 ) protocolv1alpha2.GameAgentGateway_ConnectClient {
-	return connectReadyStreamWithCapabilities(t, ctx, client, registry, sessionID, capabilityListMessage)
+	return connectReadyStreamWithCapabilities(t, ctx, client, sessionID, capabilityListMessage)
 }
 
 func connectReadyStreamWithCapabilities(
 	t *testing.T,
 	ctx context.Context,
 	client protocolv1alpha2.GameAgentGatewayClient,
-	registry *tool.Registry,
 	sessionID string,
 	capabilityMessage func(string) *protocolv1alpha2.AdapterMessage,
 ) protocolv1alpha2.GameAgentGateway_ConnectClient {
@@ -1913,9 +1925,6 @@ func connectReadyStreamWithCapabilities(
 	capabilityRequest := recvRuntimeMessage(t, stream)
 	if err := stream.Send(capabilityMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
-	}
-	for _, capability := range capabilityMessage("").GetCapabilities().GetCapabilities() {
-		waitForTool(t, registry, capability.GetName())
 	}
 	return stream
 }
@@ -2040,6 +2049,12 @@ func capabilityListMessage(correlationID string) *protocolv1alpha2.AdapterMessag
 			},
 		},
 	}
+}
+
+func capabilityListWithEntityIDMessage(correlationID string, entityID string) *protocolv1alpha2.AdapterMessage {
+	msg := capabilityListMessage(correlationID)
+	msg.GetCapabilities().EntityId = &entityID
+	return msg
 }
 
 func capabilityListWithEmoteMessage(correlationID string) *protocolv1alpha2.AdapterMessage {

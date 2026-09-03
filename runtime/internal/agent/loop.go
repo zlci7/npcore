@@ -37,7 +37,6 @@ type ActionStart struct {
 // Loop 执行 Runtime MVP0 的 one-turn AgentRun。
 type Loop struct {
 	model    model.Provider
-	tools    *tool.Registry
 	recorder trace.Recorder
 	config   Config
 
@@ -103,7 +102,7 @@ type ConnectionContext struct {
 // NewLoop 创建 Agent Loop。
 // Phase4 在 Loop 中接入 MemoryStore、MemoryProjector、ContextBuilder 和 Renderer，
 // 让一次 Agent Turn 可以读取历史 Memory 并在成功 Action 后更新 Memory。
-func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.Recorder, config Config, options ...LoopOption) *Loop {
+func NewLoop(modelProvider model.Provider, recorder trace.Recorder, config Config, options ...LoopOption) *Loop {
 	if recorder == nil {
 		recorder = trace.NoopRecorder{}
 	}
@@ -111,7 +110,6 @@ func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.
 
 	loop := &Loop{
 		model:           modelProvider,
-		tools:           tools,
 		recorder:        recorder,
 		config:          config,
 		memoryStore:     memory.NewInMemoryStoreWithMaxRecords(defaultMemoryStoreMaxRecords(config.RecentMemoryLimit)),
@@ -151,6 +149,7 @@ func (l *Loop) HandleEvent(
 	conn ConnectionContext,
 	key session.AgentSessionKey,
 	target *protocolv1alpha2.EntityRef,
+	catalog *tool.EnvironmentToolCatalog,
 	event *protocolv1alpha2.GameEvent,
 ) error {
 	if key.EntityID == "" {
@@ -169,6 +168,11 @@ func (l *Loop) HandleEvent(
 	if targetEntityID != key.EntityID {
 		return fmt.Errorf("target entity id %q does not match agent session entity id %q", targetEntityID, key.EntityID)
 	}
+	if catalog == nil {
+		return fmt.Errorf("environment tool catalog is required")
+	}
+	toolView := catalog.Snapshot()
+	tools := toolView.Available()
 	ctx, cancelTurn := context.WithTimeout(ctx, l.config.TurnTimeout)
 	defer cancelTurn()
 
@@ -182,7 +186,12 @@ func (l *Loop) HandleEvent(
 		EventType: event.EventType,
 		EntityID:  key.EntityID,
 	}, turnID)
-	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{})
+	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{
+		Fields: trace.Fields{
+			"turn_tool_count": len(tools),
+			"turn_tool_names": toolDefinitionNames(tools),
+		},
+	})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
 
 	observeCtx, cancelObserve := context.WithTimeout(ctx, l.config.ObserveTimeout)
@@ -198,7 +207,7 @@ func (l *Loop) HandleEvent(
 
 	descriptor := definition.NewAgentInstanceDescriptor(key, target)
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
-	return l.runBoundedSteps(ctx, env, key, descriptor, event, obs, recentMemories, turnID, turnTracer)
+	return l.runBoundedSteps(ctx, env, key, descriptor, event, obs, recentMemories, toolView, turnID, turnTracer)
 }
 
 func (l *Loop) runBoundedSteps(
@@ -209,6 +218,7 @@ func (l *Loop) runBoundedSteps(
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
+	toolView tool.TurnToolView,
 	turnID string,
 	turnTracer trace.TurnTracer,
 ) error {
@@ -223,7 +233,7 @@ func (l *Loop) runBoundedSteps(
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
 
-		req, err := l.buildModelRequest(key, descriptor, event, obs, recentMemories, transcript)
+		req, err := l.buildModelRequest(key, descriptor, event, obs, recentMemories, toolView, transcript)
 		if err != nil {
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": contextFailureReason(err)},
@@ -347,7 +357,7 @@ func (l *Loop) runBoundedSteps(
 			Fields: trace.Fields{
 				"step_index":         stepIndex,
 				"tool_call_count":    len(calls),
-				"concurrency_modes":  l.concurrencyModesForCalls(calls),
+				"concurrency_modes":  l.concurrencyModesForCalls(calls, toolView),
 				"max_parallel_calls": l.config.MaxParallelToolCalls,
 			},
 		})
@@ -368,7 +378,7 @@ func (l *Loop) runBoundedSteps(
 			})
 			continue
 		}
-		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex, event, turnID, asyncActionsStarted >= l.config.MaxAsyncActionsPerTurn)
+		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex, event, turnID, toolView, asyncActionsStarted >= l.config.MaxAsyncActionsPerTurn)
 		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
 		if err != nil {
 			successfulActions = append(successfulActions, outcome.SuccessfulActions...)
@@ -551,6 +561,7 @@ func (l *Loop) buildModelRequest(
 	event *protocolv1alpha2.GameEvent,
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
+	toolView tool.TurnToolView,
 	transcript []model.Message,
 ) (model.Request, error) {
 	gameDefinition, agentDefinition := l.resolveDefinitions(key, descriptor)
@@ -563,7 +574,7 @@ func (l *Loop) buildModelRequest(
 		Event:           event,
 		Observation:     obs,
 		RecentMemories:  recentMemories,
-		Tools:           l.tools.Available(),
+		Tools:           toolView.Available(),
 		Transcript:      transcript,
 	})
 	if err != nil {
@@ -592,9 +603,16 @@ func (l *Loop) resolveDefinitions(key session.AgentSessionKey, descriptor defini
 	return gameDefinition, agentDefinition
 }
 
-func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int, event *protocolv1alpha2.GameEvent, turnID string, asyncActionLimitFull bool) toolBatchScheduler {
+func (l *Loop) newToolBatchScheduler(
+	turnTracer trace.TurnTracer,
+	stepIndex int,
+	event *protocolv1alpha2.GameEvent,
+	turnID string,
+	toolView tool.TurnToolView,
+	asyncActionLimitFull bool,
+) toolBatchScheduler {
 	return toolBatchScheduler{
-		registry:             l.tools,
+		view:                 toolView,
 		maxParallelToolCalls: l.config.MaxParallelToolCalls,
 		actionTimeout:        l.config.ActionTimeout,
 		actionStartTimeout:   l.config.ActionStartTimeout,
@@ -657,10 +675,10 @@ func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int,
 	}
 }
 
-func (l *Loop) concurrencyModesForCalls(calls []model.ToolCall) []string {
+func (l *Loop) concurrencyModesForCalls(calls []model.ToolCall, toolView tool.TurnToolView) []string {
 	modes := make([]string, 0, len(calls))
 	for _, call := range calls {
-		entry, ok := l.tools.Lookup(call.Name)
+		entry, ok := toolView.Lookup(call.Name)
 		if !ok {
 			modes = append(modes, "unregistered")
 			continue
@@ -668,6 +686,14 @@ func (l *Loop) concurrencyModesForCalls(calls []model.ToolCall) []string {
 		modes = append(modes, string(entry.Concurrency))
 	}
 	return modes
+}
+
+func toolDefinitionNames(tools []model.ToolDefinition) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
 }
 
 func toolResultCallIDs(results []model.ToolResult) []string {

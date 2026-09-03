@@ -38,7 +38,7 @@ const (
 )
 
 type toolBatchScheduler struct {
-	registry             *tool.Registry
+	view                 tool.TurnToolView
 	maxParallelToolCalls int
 	actionTimeout        time.Duration
 	actionStartTimeout   time.Duration
@@ -265,10 +265,7 @@ func (s toolBatchScheduler) preflight(
 }
 
 func (s toolBatchScheduler) lookup(name string) (tool.Entry, bool) {
-	if s.registry == nil {
-		return tool.Entry{}, false
-	}
-	return s.registry.Lookup(name)
+	return s.view.Lookup(name)
 }
 
 func (s toolBatchScheduler) runParallelGroup(

@@ -180,20 +180,11 @@ func (f *fakeEnvironment) Observe(ctx context.Context, worldID string, entityID 
 }
 
 func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{
-			Name:            "speak",
-			Description:     "Make the NPC speak.",
-			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
-			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
-		},
-	})
-
+	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
@@ -210,10 +201,10 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 		TargetEntityId: key.EntityID,
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), first); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, first); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), second); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, second); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -274,7 +265,7 @@ func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *t
 	if err != nil {
 		t.Fatalf("NewCatalog returned error: %v", err)
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
 	event := gameEvent("event_1", key)
@@ -285,7 +276,7 @@ func TestHandleEventRendersDefinitionsFromInjectedCatalogAndCanonicalTarget(t *t
 		DefinitionId: "villager/farmer",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, target, event); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, target, registry, event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -321,11 +312,11 @@ func TestHandleEventRejectsMissingCanonicalTarget(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, nil, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, nil, registry, gameEvent("event_1", key))
 	if err == nil {
 		t.Fatal("HandleEvent returned nil error, want missing canonical target error")
 	}
@@ -345,7 +336,7 @@ func TestHandleEventRejectsCanonicalTargetEntityMismatch(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "creature:alpha"}
 	target := &protocolv1alpha2.EntityRef{
@@ -355,12 +346,77 @@ func TestHandleEventRejectsCanonicalTargetEntityMismatch(t *testing.T) {
 		DefinitionId: "villager/farmer",
 	}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, target, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, target, registry, gameEvent("event_1", key))
 	if err == nil {
 		t.Fatal("HandleEvent returned nil error, want target mismatch error")
 	}
 	if !strings.Contains(err.Error(), "target entity id") {
 		t.Fatalf("error = %v, want target entity id", err)
+	}
+}
+
+func TestHandleEventRejectsNilEnvironmentToolCatalog(t *testing.T) {
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{}
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), nil, gameEvent("event_1", key))
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want missing environment tool catalog error")
+	}
+	if !strings.Contains(err.Error(), "environment tool catalog is required") {
+		t.Fatalf("HandleEvent error = %v, want missing environment tool catalog", err)
+	}
+	if env.observeCount != 0 {
+		t.Fatalf("Observe count = %d, want 0", env.observeCount)
+	}
+}
+
+func TestHandleEventUsesTurnToolViewForModelRequestAndScheduler(t *testing.T) {
+	catalog := mustEnvironmentToolCatalog(t, []*protocolv1alpha2.Capability{
+		{
+			Name:            "emote",
+			Description:     "Display an emote.",
+			InputSchemaJson: `{"type":"object","properties":{"emote":{"type":"string","enum":["happy","sad"]}},"required":["emote"],"additionalProperties":false}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+	})
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "emote",
+					Arguments: map[string]any{"emote": "happy"},
+				}},
+				Control: model.ControlDirective{Kind: model.ControlSettle},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(provider.requests))
+	}
+	if got, want := provider.requests[0].Tools[0].Name, "emote"; got != want {
+		t.Fatalf("request tool = %q, want %q", got, want)
+	}
+	if env.submittedAction == nil {
+		t.Fatal("expected emote action to be submitted")
+	}
+	if env.submittedAction.Capability != "emote" {
+		t.Fatalf("submitted capability = %q, want emote", env.submittedAction.Capability)
 	}
 }
 
@@ -391,7 +447,7 @@ func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewCatalog returned error: %v", err)
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	alphaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:alpha", EntityID: "creature:alpha"}
 	betaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:beta", EntityID: "creature:beta"}
@@ -408,10 +464,10 @@ func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) 
 		DefinitionId: "villager/farmer",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha", alphaKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, registry, gameEvent("event_alpha", alphaKey)); err != nil {
 		t.Fatalf("alpha HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, gameEvent("event_beta", betaKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, registry, gameEvent("event_beta", betaKey)); err != nil {
 		t.Fatalf("beta HandleEvent returned error: %v", err)
 	}
 
@@ -490,7 +546,7 @@ func TestHandleEventKeepsMemoryScopeSeparateForSharedDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCatalog returned error: %v", err)
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	alphaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:shared", EntityID: "creature:alpha"}
 	betaKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:shared", EntityID: "creature:beta"}
@@ -507,13 +563,13 @@ func TestHandleEventKeepsMemoryScopeSeparateForSharedDefinition(t *testing.T) {
 		DefinitionId: "villager/farmer",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha_1", alphaKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, registry, gameEvent("event_alpha_1", alphaKey)); err != nil {
 		t.Fatalf("first alpha HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, gameEvent("event_beta_1", betaKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, betaKey, betaTarget, registry, gameEvent("event_beta_1", betaKey)); err != nil {
 		t.Fatalf("beta HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, gameEvent("event_alpha_2", alphaKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, alphaKey, alphaTarget, registry, gameEvent("event_alpha_2", alphaKey)); err != nil {
 		t.Fatalf("second alpha HandleEvent returned error: %v", err)
 	}
 
@@ -545,7 +601,7 @@ func TestHandleEventRendersDifferentBundledStardewDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalogFromDir returned error: %v", err)
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithDefinitionCatalog(catalog))
 	conn := agent.ConnectionContext{GameID: "stardew-valley", SessionID: "session:test"}
 	abigailKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "farm:one", EntityID: "npc:Abigail"}
 	linusKey := session.AgentSessionKey{GameID: conn.GameID, WorldID: "farm:one", EntityID: "npc:Linus"}
@@ -562,10 +618,10 @@ func TestHandleEventRendersDifferentBundledStardewDefinitions(t *testing.T) {
 		DefinitionId: "npc:Linus",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, abigailKey, abigailTarget, gameEvent("event_abigail", abigailKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, abigailKey, abigailTarget, registry, gameEvent("event_abigail", abigailKey)); err != nil {
 		t.Fatalf("Abigail HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, linusKey, linusTarget, gameEvent("event_linus", linusKey)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, linusKey, linusTarget, registry, gameEvent("event_linus", linusKey)); err != nil {
 		t.Fatalf("Linus HandleEvent returned error: %v", err)
 	}
 
@@ -608,12 +664,12 @@ func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	config := agent.DefaultConfig()
 	config.RecentMemoryLimit = 25
 	config.MemoryContextSizeLimit = 65536
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
 	for i := 1; i <= 26; i++ {
-		if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent(fmt.Sprintf("event_%02d", i), key)); err != nil {
+		if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent(fmt.Sprintf("event_%02d", i), key)); err != nil {
 			t.Fatalf("HandleEvent(%d) returned error: %v", i, err)
 		}
 	}
@@ -634,14 +690,14 @@ func TestHandleEventSkipsMemoryWhenDisabled(t *testing.T) {
 	provider := &recordingProvider{}
 	config := agent.DefaultConfig()
 	config.MemoryEnabled = boolPtr(false)
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_2", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_2", key)); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -661,14 +717,14 @@ func TestWithMemoryStoreNilDoesNotDisableDefaultMemoryStore(t *testing.T) {
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(nil))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(nil))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_2", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_2", key)); err != nil {
 		t.Fatalf("second HandleEvent returned error: %v", err)
 	}
 
@@ -687,11 +743,11 @@ func TestHandleEventFailOpenWhenMemoryLoadFails(t *testing.T) {
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
 	store := &failRecentStore{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -711,11 +767,11 @@ func TestHandleEventCompletesWhenMemoryAppendFails(t *testing.T) {
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(failAppendStore{}))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(failAppendStore{}))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -728,11 +784,11 @@ func TestHandleEventCompletesWhenMemoryProjectionFails(t *testing.T) {
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryProjector(failProjector{}))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryProjector(failProjector{}))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -853,9 +909,8 @@ func assertRequestContentContains(t *testing.T, content string, values ...string
 	}
 }
 
-func newSpeakRegistry() *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+func newSpeakRegistry() *tool.EnvironmentToolCatalog {
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "speak",
 			Description:     "Make the NPC speak.",
@@ -863,12 +918,25 @@ func newSpeakRegistry() *tool.Registry {
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		},
 	})
-	return registry
 }
 
-func newParallelSpeakRegistry() *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+func mustEnvironmentToolCatalog(t *testing.T, capabilities []*protocolv1alpha2.Capability) *tool.EnvironmentToolCatalog {
+	t.Helper()
+
+	catalog, diagnostics, err := tool.BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		t.Fatalf("BuildEnvironmentToolCatalog returned error: %v", err)
+	}
+	if diagnostics.CatalogToolCount != len(catalog.Available()) {
+		t.Fatalf("CatalogToolCount = %d, Available count = %d", diagnostics.CatalogToolCount, len(catalog.Available()))
+	}
+	return catalog
+}
+
+func newParallelSpeakRegistry() *tool.EnvironmentToolCatalog {
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "speak",
 			Description:     "Make the NPC speak.",
@@ -877,12 +945,10 @@ func newParallelSpeakRegistry() *tool.Registry {
 			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE,
 		},
 	})
-	return registry
 }
 
-func newSpeakEmoteRegistry() *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+func newSpeakEmoteRegistry() *tool.EnvironmentToolCatalog {
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "speak",
 			Description:     "Make the NPC speak.",
@@ -896,12 +962,10 @@ func newSpeakEmoteRegistry() *tool.Registry {
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		},
 	})
-	return registry
 }
 
-func newSpeakAskPlayerRegistry() *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+func newSpeakAskPlayerRegistry() *tool.EnvironmentToolCatalog {
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "speak",
 			Description:     "Make the NPC speak.",
@@ -916,15 +980,13 @@ func newSpeakAskPlayerRegistry() *tool.Registry {
 			Extensions:      loopToolPolicyExtensions(true, true),
 		},
 	})
-	return registry
 }
 
-func newMoveToRegistry() *tool.Registry {
+func newMoveToRegistry() *tool.EnvironmentToolCatalog {
 	return newMoveToRegistryWithPolicy(tool.ToolPolicy{})
 }
 
-func newMoveToRegistryWithPolicy(policy tool.ToolPolicy) *tool.Registry {
-	registry := tool.NewRegistry()
+func newMoveToRegistryWithPolicy(policy tool.ToolPolicy) *tool.EnvironmentToolCatalog {
 	capability := &protocolv1alpha2.Capability{
 		Name:            "move_to",
 		Description:     "Move the NPC to a target location and tile.",
@@ -935,8 +997,7 @@ func newMoveToRegistryWithPolicy(policy tool.ToolPolicy) *tool.Registry {
 	if policy.ExclusivePerStep || policy.SettleAfterSuccess {
 		capability.Extensions = loopToolPolicyExtensions(policy.ExclusivePerStep, policy.SettleAfterSuccess)
 	}
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{capability})
-	return registry
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{capability})
 }
 
 func loopToolPolicyExtensions(exclusivePerStep bool, settleAfterSuccess bool) *structpb.Struct {
@@ -954,17 +1015,16 @@ func loopToolPolicyExtensions(exclusivePerStep bool, settleAfterSuccess bool) *s
 	return extensions
 }
 
-func newParallelSenseRegistry() *tool.Registry {
+func newParallelSenseRegistry() *tool.EnvironmentToolCatalog {
 	return newSenseRegistry(protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE)
 }
 
-func newSequentialSenseRegistry() *tool.Registry {
+func newSequentialSenseRegistry() *tool.EnvironmentToolCatalog {
 	return newSenseRegistry(protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL)
 }
 
-func newSenseRegistry(concurrencyMode protocolv1alpha2.CapabilityConcurrencyMode) *tool.Registry {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+func newSenseRegistry(concurrencyMode protocolv1alpha2.CapabilityConcurrencyMode) *tool.EnvironmentToolCatalog {
+	return environmentCatalogFromCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "sense",
 			Description:     "Read local environment state.",
@@ -973,7 +1033,16 @@ func newSenseRegistry(concurrencyMode protocolv1alpha2.CapabilityConcurrencyMode
 			ConcurrencyMode: concurrencyMode,
 		},
 	})
-	return registry
+}
+
+func environmentCatalogFromCapabilities(capabilities []*protocolv1alpha2.Capability) *tool.EnvironmentToolCatalog {
+	catalog, _, err := tool.BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return catalog
 }
 
 func gameEvent(eventID string, key session.AgentSessionKey) *protocolv1alpha2.GameEvent {
@@ -1162,19 +1231,10 @@ func actionRequestLabel(req *protocolv1alpha2.ActionRequest) string {
 }
 
 func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
-	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{
-			Name:            "speak",
-			Description:     "Make the NPC speak.",
-			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
-			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
-		},
-	})
-
+	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
-	loop := agent.NewLoop(fake.NewProvider(), registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(fake.NewProvider(), recorder, agent.DefaultConfig())
 
 	event := &protocolv1alpha2.GameEvent{
 		EventId:        "event_1",
@@ -1211,7 +1271,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		EntityID: event.TargetEntityId,
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), event); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1300,11 +1360,11 @@ func TestHandleEventExecutesSingleToolCallFromModelDecision(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1329,11 +1389,11 @@ func TestHandleEventCompletesOnSettleOnlyDecision(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1352,11 +1412,11 @@ func TestHandleEventSendsTurnCompletionOnSettle(t *testing.T) {
 	provider := &scriptedProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 	}}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1381,11 +1441,11 @@ func TestHandleEventSendsTurnCompletionOnFailure(t *testing.T) {
 	provider := &scriptedProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlContinue}}},
 	}}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil {
 		t.Fatal("HandleEvent returned nil error, want invalid model response")
 	}
@@ -1411,11 +1471,11 @@ func TestTurnCompletionSendFailureDoesNotChangeCompletedTurnStatus(t *testing.T)
 	provider := &scriptedProvider{responses: []model.Response{
 		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 	}}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1440,11 +1500,11 @@ func TestHandleEventActionRequestCarriesSourceCorrelation(t *testing.T) {
 			},
 		},
 	}}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1475,11 +1535,11 @@ func TestHandleEventWritesContextFactMemoryOnSettleOnlyDecision(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Let's go fishing."))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, playerUtteranceEvent("event_1", key, 43, "Let's go fishing."))
 	if err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
@@ -1518,11 +1578,11 @@ func TestHandleEventRunsBatchToolCallsThenSettle(t *testing.T) {
 			},
 		}},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 2 {
@@ -1562,11 +1622,11 @@ func TestHandleEventRejectsExclusivePolicyToolMixedWithOtherToolCalls(t *testing
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
@@ -1612,11 +1672,11 @@ func TestHandleEventSettlesAfterSuccessfulPolicyToolWithoutNextModelRequest(t *t
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
@@ -1653,11 +1713,11 @@ func TestHandleEventSuspendsResumesAndReobservesAfterAsyncAction(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1696,7 +1756,7 @@ func TestHandleEventSuspendsResumesAndReobservesAfterAsyncAction(t *testing.T) {
 func TestHandleEventAsyncSuccessContinuesToResumeStepBeforeSettling(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		registry *tool.Registry
+		registry *tool.EnvironmentToolCatalog
 		control  model.ControlKind
 	}{
 		{
@@ -1731,11 +1791,11 @@ func TestHandleEventAsyncSuccessContinuesToResumeStepBeforeSettling(t *testing.T
 					},
 				},
 			}
-			loop := agent.NewLoop(provider, tc.registry, recorder, agent.DefaultConfig())
+			loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 			conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 			key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), tc.registry, gameEvent("event_1", key)); err != nil {
 				t.Fatalf("HandleEvent returned error: %v", err)
 			}
 
@@ -1787,11 +1847,11 @@ func TestHandleEventRejectsSecondAsyncActionPerTurn(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxAsyncActionsPerTurn = 1
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1830,11 +1890,11 @@ func TestHandleEventFailsTurnWhenReobserveFailsAfterAsyncSuccess(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "adapter observe closed") {
 		t.Fatalf("HandleEvent error = %v, want re-observe failure", err)
 	}
@@ -1890,11 +1950,11 @@ func TestHandleEventAsyncTerminalFailureFeedsNextStep(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1929,11 +1989,11 @@ func TestHandleEventRunsMultipleStepsUntilSettle(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -1983,11 +2043,11 @@ func TestHandleEventRejectsToolCallIDReusedAcrossSteps(t *testing.T) {
 			},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2020,11 +2080,11 @@ func TestHandleEventFailsWhenMaxStepsExceeded(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxSteps = 2
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -2051,11 +2111,11 @@ func TestHandleEventFailsWhenMaxToolCallsPerStepExceeded(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxToolCallsPerStep = 1
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max tool calls per step exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max tool calls per step exceeded", err)
 	}
@@ -2080,11 +2140,11 @@ func TestHandleEventFailsWhenMaxToolCallsPerTurnExceeded(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxToolCallsPerTurn = 2
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max tool calls per turn exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max tool calls per turn exceeded", err)
 	}
@@ -2102,11 +2162,11 @@ func TestHandleEventTurnTimeoutCanPreemptBudgetsWithDelayedProvider(t *testing.T
 	config := agent.DefaultConfig()
 	config.TurnTimeout = 30 * time.Millisecond
 	config.LLMTimeout = time.Second
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("HandleEvent error = %v, want context deadline exceeded", err)
 	}
@@ -2125,11 +2185,11 @@ func TestFailedMultiStepTurnDoesNotAppendMemory(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxSteps = 1
-	loop := agent.NewLoop(provider, registry, recorder, config, agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, config, agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -2150,11 +2210,11 @@ func TestFailedTurnWithContextFactDoesNotAppendMemory(t *testing.T) {
 			},
 		}},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Will this be remembered?"))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, playerUtteranceEvent("event_1", key, 43, "Will this be remembered?"))
 	if err == nil || !strings.Contains(err.Error(), "continue control requires tool calls") {
 		t.Fatalf("HandleEvent error = %v, want invalid continue without tool calls", err)
 	}
@@ -2188,11 +2248,11 @@ func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.
 	}
 	config := agent.DefaultConfig()
 	config.ActionTimeout = time.Second
-	loop := agent.NewLoop(provider, registry, recorder, config, agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, config, agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), playerUtteranceEvent("event_1", key, 43, "Remember my request."))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, playerUtteranceEvent("event_1", key, 43, "Remember my request."))
 	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
 		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
 	}
@@ -2235,11 +2295,11 @@ func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
 			},
 		}},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
 		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
 	}
@@ -2280,11 +2340,11 @@ func TestCompletedTurnAfterRejectedActionWritesOnlySuccessfulOutcomes(t *testing
 			{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(store.appended); got != 1 {
@@ -2315,11 +2375,11 @@ func TestHandleEventRetriesAfterInvalidToolCallBatchWithinStepBudget(t *testing.
 			{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 0 {
@@ -2351,11 +2411,11 @@ func TestHandleEventRetriesAfterActionResultTerminalFailure(t *testing.T) {
 					{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 				},
 			}
-			loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+			loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 			conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 			key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+			if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 				t.Fatalf("HandleEvent returned error: %v", err)
 			}
 			if got := len(provider.requests); got != 2 {
@@ -2381,11 +2441,11 @@ func TestHandleEventDoesNotSettleAfterFailedBatchEvenWhenControlSettleRequested(
 			{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(provider.requests); got != 2 {
@@ -2408,11 +2468,11 @@ func TestHandleEventFailsWhenFailureLoopExhaustsMaxSteps(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxSteps = 1
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 	if err == nil || !strings.Contains(err.Error(), "max steps exceeded") {
 		t.Fatalf("HandleEvent error = %v, want max steps exceeded", err)
 	}
@@ -2432,11 +2492,11 @@ func TestMultiStepTraceEventsShareTurnIDAndIncreaseStepIndex(t *testing.T) {
 			{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2467,11 +2527,11 @@ func TestToolBatchTraceFieldsIncludeCallCountAndConcurrency(t *testing.T) {
 			},
 		}},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2498,11 +2558,11 @@ func TestMultiStepTerminalEventIsUniqueAndLast(t *testing.T) {
 			{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
 		},
 	}
-	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key)); err != nil {
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key)); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -2529,11 +2589,11 @@ func TestMaxStepsTraceFailureReason(t *testing.T) {
 	}
 	config := agent.DefaultConfig()
 	config.MaxSteps = 1
-	loop := agent.NewLoop(provider, registry, recorder, config)
+	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	_ = loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), gameEvent("event_1", key))
+	_ = loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), registry, gameEvent("event_1", key))
 
 	terminal := recorder.events[len(recorder.events)-1]
 	if terminal.Event != trace.EventTurnFailed || terminal.Reason != "max_steps_exceeded" {
