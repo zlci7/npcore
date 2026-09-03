@@ -1,12 +1,16 @@
 # GameAgent MVP0 Phase7.2 技术开发与验收方案
 
-> **Status:** Implementation Plan Accepted
+> **Status:** Accepted
 > **Date:** 2026-09-03
 > **Phase:** Phase7.2 Environment-scoped Tool View
 > **Roadmap Baseline:** [GameAgent 阶段规划](../summary/GameAgent%20阶段规划.md) v1.9
 > **Previous Gate:** Phase7.1 code reviewed
 > **Review Required Before Coding:** Yes
 > **Code Baseline:** `main` @ `263d829`
+> **Accepted Commit:** `main` @ `3f5a490`
+> **Review Result:** Accepted
+> **Reviewer:** zlc7
+> **Review Date:** 2026-09-03
 
 ---
 
