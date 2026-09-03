@@ -288,19 +288,24 @@ func TestTurnToolViewIsSnapshotOfCatalogEntries(t *testing.T) {
 	}
 }
 
-func TestNilEnvironmentToolCatalogSnapshotFailsClearly(t *testing.T) {
-	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			t.Fatal("Snapshot did not panic for nil catalog")
-		}
-		if got, want := recovered, "environment tool catalog is nil"; got != want {
-			t.Fatalf("panic = %v, want %q", got, want)
-		}
-	}()
+func TestNilEnvironmentToolCatalogFailsClearly(t *testing.T) {
+	t.Run("Available", func(t *testing.T) {
+		assertNilEnvironmentToolCatalogPanics(t, func(catalog *EnvironmentToolCatalog) {
+			_ = catalog.Available()
+		})
+	})
 
-	var catalog *EnvironmentToolCatalog
-	_ = catalog.Snapshot()
+	t.Run("Lookup", func(t *testing.T) {
+		assertNilEnvironmentToolCatalogPanics(t, func(catalog *EnvironmentToolCatalog) {
+			_, _ = catalog.Lookup("speak")
+		})
+	})
+
+	t.Run("Snapshot", func(t *testing.T) {
+		assertNilEnvironmentToolCatalogPanics(t, func(catalog *EnvironmentToolCatalog) {
+			_ = catalog.Snapshot()
+		})
+	})
 }
 
 func TestTurnToolViewAvailableDoesNotExposeInternalSlice(t *testing.T) {
@@ -336,6 +341,40 @@ func invalidToolPolicyExtensions(t *testing.T) *structpb.Struct {
 		t.Fatalf("build invalid extensions: %v", err)
 	}
 	return extensions
+}
+
+func toolPolicyExtensions(t *testing.T, exclusivePerStep bool, settleAfterSuccess bool) *structpb.Struct {
+	t.Helper()
+
+	extensions, err := structpb.NewStruct(map[string]any{
+		"gameagent": map[string]any{
+			"tool_policy": map[string]any{
+				"exclusive_per_step":   exclusivePerStep,
+				"settle_after_success": settleAfterSuccess,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build extensions: %v", err)
+	}
+	return extensions
+}
+
+func assertNilEnvironmentToolCatalogPanics(t *testing.T, access func(*EnvironmentToolCatalog)) {
+	t.Helper()
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("catalog access did not panic")
+		}
+		if got, want := recovered, "environment tool catalog is nil"; got != want {
+			t.Fatalf("panic = %v, want %q", got, want)
+		}
+	}()
+
+	var catalog *EnvironmentToolCatalog
+	access(catalog)
 }
 
 func strPtr(value string) *string {

@@ -108,25 +108,25 @@ func BuildEnvironmentToolCatalog(list *protocolv1alpha2.CapabilityList) (*Enviro
 }
 
 func (c *EnvironmentToolCatalog) Available() []model.ToolDefinition {
-	if c == nil {
-		return nil
-	}
+	requireEnvironmentToolCatalog(c)
 	return availableToolDefinitions(c.tools)
 }
 
 func (c *EnvironmentToolCatalog) Lookup(name string) (Entry, bool) {
-	if c == nil {
-		return Entry{}, false
-	}
+	requireEnvironmentToolCatalog(c)
 	entry, ok := c.tools[name]
 	return entry, ok
 }
 
 func (c *EnvironmentToolCatalog) Snapshot() TurnToolView {
+	requireEnvironmentToolCatalog(c)
+	return TurnToolView{tools: cloneEntries(c.tools)}
+}
+
+func requireEnvironmentToolCatalog(c *EnvironmentToolCatalog) {
 	if c == nil {
 		panic("environment tool catalog is nil")
 	}
-	return TurnToolView{tools: cloneEntries(c.tools)}
 }
 
 func (v TurnToolView) Available() []model.ToolDefinition {
