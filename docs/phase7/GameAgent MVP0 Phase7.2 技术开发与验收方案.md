@@ -1,12 +1,12 @@
 # GameAgent MVP0 Phase7.2 技术开发与验收方案
 
-> **Status:** Implementation Plan Draft
+> **Status:** Implementation Plan Accepted
 > **Date:** 2026-09-03
 > **Phase:** Phase7.2 Environment-scoped Tool View
 > **Roadmap Baseline:** [GameAgent 阶段规划](../summary/GameAgent%20阶段规划.md) v1.9
 > **Previous Gate:** Phase7.1 code reviewed
 > **Review Required Before Coding:** Yes
-> **Code Baseline:** `main` @ `d92036d`
+> **Code Baseline:** `main` @ `263d829`
 
 ---
 
@@ -192,19 +192,34 @@ Runtime 发送:
     CapabilityRequest{}
 
 Adapter 返回:
-    CapabilityList.entity_id 必须为空
+    CapabilityList.entity_id unset
+    或 CapabilityList.entity_id == ""
 ```
 
-如果 `CapabilityList.entity_id` 非空：
+`CapabilityList.entity_id` 的空值语义：
 
 ```text
-Runtime 认为这是 entity-scoped capability list
-Phase7.2 MVP0 不支持
-Gateway 记录 unsupported_entity_scope diagnostic
-Gateway 的 Connect 返回非 nil error 并结束 stream
-Runtime 不构造 EnvironmentToolCatalog
-Runtime 不把这些工具暴露成 EnvironmentSession 全局工具
-Runtime 不进入后续 GameEvent admission
+unset
+    environment-level capability list
+
+""
+    environment-level capability list
+
+strings.TrimSpace(entity_id) != ""
+    entity-scoped capability list
+    Phase7.2 MVP0 不支持
+    Gateway 记录 unsupported_entity_scope diagnostic
+    Gateway 的 Connect 返回非 nil error 并结束 stream
+    Runtime 不构造 EnvironmentToolCatalog
+    Runtime 不把这些工具暴露成 EnvironmentSession 全局工具
+    Runtime 不进入后续 GameEvent admission
+
+entity_id 非空且 strings.TrimSpace(entity_id) == ""
+    invalid entity scope
+    Gateway 记录 invalid_entity_scope diagnostic
+    Gateway 的 Connect 返回非 nil error 并结束 stream
+    Runtime 不构造 EnvironmentToolCatalog
+    Runtime 不进入后续 GameEvent admission
 ```
 
 这样可以避免把某个实体专属能力错误暴露给整个环境连接。
@@ -291,9 +306,9 @@ error
 返回规则：
 
 ```text
-CapabilityList.entity_id 非空
+CapabilityList.entity_id trim 后非空，或纯空白非法
     catalog = nil
-    diagnostics 记录 unsupported_entity_scope
+    diagnostics 记录 unsupported_entity_scope 或 invalid_entity_scope
     error != nil
     Gateway 记录 diagnostics 后结束 stream
 
@@ -308,7 +323,9 @@ environment-level CapabilityList 合法，但所有 capability 都被过滤
     error = nil
 ```
 
-空 Catalog 是合法结果。它表示当前 EnvironmentSession 没有可用工具，不等于 transport failure。Stardew 回归测试单独证明生产 CapabilityList 最终非空。
+空 Catalog 是合法结果。它表示当前 EnvironmentSession 没有可用工具，不等于 transport failure。Stardew-shaped Runtime fixture 单独证明与 Stardew Adapter 当前声明等价形状的 capability list 可以进入 catalog 和 TurnToolView snapshot。
+
+成功返回时 `catalog` 必须是非 nil 的显式对象。`empty catalog` 也是显式对象：`Available()` 返回空列表，`Lookup()` 返回 false。`nil catalog` 表示 bootstrap 或接线失败，不能被当作“当前环境没有工具”。
 
 ## 4.5 EnvironmentToolCatalog
 
@@ -368,6 +385,21 @@ Gateway 在 `Connect` 中完成 capability bootstrap，并把 `EnvironmentToolCa
 
 catalog 是 `Connect` 的 stream 局部状态。GameEvent admission 成功后，`dispatchGameEvent` 通过 task closure 把当前 catalog 传给 `AgentLoop.HandleEvent`；AgentLoop 在 `HandleEvent` 内捕获 `TurnToolView`，后续构建模型请求和创建 Scheduler 时都显式传入这份 snapshot。
 
+Phase7.2 固定采用这条接线路径：
+
+```text
+Gateway Connect stream
+    持有非 nil EnvironmentToolCatalog
+
+dispatchGameEvent task closure
+    将 EnvironmentToolCatalog 传给 AgentLoop.HandleEvent
+
+AgentLoop.HandleEvent
+    从 EnvironmentToolCatalog 捕获 TurnToolView
+```
+
+`AgentLoop.HandleEvent` 必须收到非 nil `EnvironmentToolCatalog`。如果入口参数缺失，Runtime 应返回明确错误；不能静默创建空视图，也不能把 nil 解释成“当前环境没有工具”。
+
 Environment tool 不通过 `Server.tools`、包级变量、`session_id` map 或共享 `Registry` 间接读取。
 
 Composition Root 也要完成迁移。`runtime/cmd/server/main.go` 不能再创建一份 environment capability 全局 registry 并同时注入 Gateway 和 AgentLoop。
@@ -391,7 +423,9 @@ Phase7.2 后，旧 `tool.Registry` 不能继续承载 environment capabilities�
 
 ## 4.8 最小 diagnostics
 
-Phase7.2 记录最小工具诊断：
+Phase7.2 记录最小工具诊断。诊断分为 bootstrap 阶段和 AgentTurn 阶段。
+
+`BootstrapDiagnostics` 只记录 capability bootstrap 结果：
 
 ```text
 accepted tool count
@@ -402,18 +436,33 @@ skipped invalid schema names
 skipped invalid tool_policy names
 duplicate tool names
 unsupported entity_id
+invalid entity_id
 capability revision
 catalog tool count
-turn snapshot tool count
 ```
 
 `capability revision` 只记录，不驱动 replacement、hot refresh 或 subscription。
+
+`BootstrapDiagnostics` 是 EnvironmentSession scope。它只在 Connect / capability bootstrap 过程中返回，用于 Gateway log 和 bootstrap 测试。
+
+AgentTurn trace / consistency diagnostic 记录 turn 级快照信息：
+
+```text
+turn snapshot tool count
+turn snapshot tool names
+```
+
+Turn snapshot count / names 是 AgentTurn scope，进入 turn trace 字段。
+
+`BuildEnvironmentToolCatalog` 不负责填写 AgentTurn 尚未创建时才会出现的 snapshot 数据。
 
 这些 diagnostics 用于开发期测试、日志和 trace 字段。它们不承担完整 BuildReport 职责。
 
 ---
 
-# 5. 开发步骤
+# 5. Implementation Handoff
+
+本节是给 Phase7.2 coding agent 的开发交接说明。本文档只定义架构合同、实现顺序和验收口径，不执行代码改动。
 
 ## M1：EnvironmentToolCatalog builder
 
@@ -442,8 +491,8 @@ Gateway 在 capability discovery 完成后，为当前 stream 建立独立 catal
 
 ```text
 每条 Connect stream 拥有自己的 EnvironmentToolCatalog
-CapabilityList.entity_id 非空时 Connect 返回非 nil error 并结束 stream
-CapabilityList.entity_id 非空时不进入后续 GameEvent admission
+CapabilityList.entity_id trim 后非空或纯空白非法时 Connect 返回非 nil error 并结束 stream
+CapabilityList.entity_id trim 后非空或纯空白非法时不进入后续 GameEvent admission
 不同 stream 的 capability 不写入共享 environment registry
 runtime/cmd/server/main.go 不再双向注入 environment capability 全局 Registry
 ```
@@ -462,18 +511,23 @@ concurrency mode / execution mode / Tool Policy 来自 TurnToolView
 同一 Turn 内多个 AgentStep 使用同一份 snapshot
 ```
 
-## M4：集成测试与 Stardew happy path 回归
+## M4：集成测试与 Stardew-shaped fixture 回归
 
-补齐多 EnvironmentSession、同名工具、非法 capability 和 Stardew 当前能力列表的回归测试。
+补齐多 EnvironmentSession、同名工具、非法 capability 和 Stardew-shaped Runtime fixture 回归测试。
 
 验收点：
 
 ```text
-单 Stardew Adapter happy path 不退化
-present_dialogue / emote / face_player / move_to 仍可按现有语义暴露和执行
+Runtime fixture 能接受与 Stardew Adapter 当前声明等价形状的 capability list
+present_dialogue / emote / face_player / move_to 能进入 catalog 和 TurnToolView snapshot
+present_dialogue / emote / face_player / move_to 的 schema、execution mode、concurrency mode 和 Tool Policy 不退化
 Phase5 multi-step 与 Phase6 async move_to 行为不因 Tool View 改造退化
 多 EnvironmentSession 同名工具测试同时验证模型工具、参数校验、Scheduler lookup 和 Tool Policy 均使用各自 snapshot
 ```
+
+## M5：测试与回归命令
+
+代码实现完成后，coding agent 按第 6 章测试计划执行单元测试、集成测试和回归命令。
 
 ---
 
@@ -495,6 +549,7 @@ nil capability 被跳过并记录 diagnostic
 同一 CapabilityList 内重复 name 不暴露
 所有 capability 都无效时 bootstrap 成功生成 empty catalog
 empty catalog 的 accepted_count / catalog_tool_count 为 0
+成功 bootstrap 返回非 nil explicit empty catalog
 Available 按 name 稳定排序
 Lookup 不改变 catalog
 TurnToolView 捕获后不受后续 catalog 变量变化影响
@@ -507,8 +562,10 @@ TurnToolView 捕获后不受后续 catalog 变量变化影响
 ```text
 两个 EnvironmentSession 上报不同 capabilities，新 Turn 只看到当前连接的 tools
 两个 EnvironmentSession 上报同名 capability 但 schema / policy 不同时，不互相覆盖
-CapabilityList.entity_id 非空时 bootstrap 明确失败
-CapabilityList.entity_id 非空时没有 catalog，且不进入 GameEvent admission
+CapabilityList.entity_id trim 后非空时 bootstrap 明确失败，并记录 unsupported_entity_scope
+CapabilityList.entity_id 纯空白时 bootstrap 明确失败，并记录 invalid_entity_scope
+CapabilityList.entity_id scope 非法时没有 catalog，且不进入 GameEvent admission
+CapabilityList.entity_id unset 和显式 "" 都按 environment-level 处理
 bootstrap diagnostics 可以在测试中确认
 ```
 
@@ -526,6 +583,9 @@ async / sync execution mode 来自 TurnToolView
 Tool Policy 来自 TurnToolView
 同一 AgentTurn 的第 1 个 AgentStep 和后续 AgentStep 使用同一份 TurnToolView
 多 EnvironmentSession 同名工具的模型列表、参数校验、Scheduler lookup 和 Tool Policy 各自隔离
+HandleEvent 收到 nil EnvironmentToolCatalog 时返回明确错误
+explicit empty TurnToolView + 模型 settle 可以正常完成 Turn
+explicit empty TurnToolView + 模型 ToolCall 返回 tool_not_registered
 ```
 
 ## 6.4 回归测试
@@ -539,7 +599,9 @@ go test ./runtime/internal/agent
 go test ./runtime/...
 ```
 
-如 Phase7.2 代码修改触碰协议生成或 Adapter fixture，再补充对应静态检查。
+Stardew-shaped Runtime fixture 是 hard gate。coding agent 需要证明与 Stardew Adapter 当前声明等价形状的 capability list 可以进入 catalog 和 TurnToolView snapshot。
+
+如果 Phase7.2 代码修改触碰协议生成、Adapter fixture 或 Stardew adapter capability 声明，再运行对应 adapter unit / build test。真实进游戏 smoke 和最终 Stardew 实机表现不属于 Phase7.2 hard gate。
 
 ---
 
@@ -556,10 +618,13 @@ Phase7.2 代码开发完成后必须满足：
 6. 空 name 或首尾有空白的 name 不会进入模型，也不能被 Scheduler 执行。
 7. invalid input_schema_json 或非 object input schema 不会进入模型，也不能被 Scheduler 执行。
 8. invalid tool_policy 不会进入模型，也不能被 Scheduler 执行。
-9. CapabilityList.entity_id 非空时不会被暴露成 EnvironmentSession 全局工具。
-10. 所有 capability 都被过滤时，bootstrap 返回合法 empty catalog。
-11. 不同 EnvironmentSession 的同名工具不互相覆盖。
-12. 现有 Stardew 单连接 happy path 不退化。
+9. CapabilityList.entity_id trim 后非空或纯空白非法时不会被暴露成 EnvironmentSession 全局工具。
+10. CapabilityList.entity_id unset 和显式 "" 都按 environment-level 处理。
+11. CapabilityList.entity_id 纯空白时 bootstrap 明确失败。
+12. 所有 capability 都被过滤时，bootstrap 返回合法 empty catalog。
+13. nil EnvironmentToolCatalog 不会被静默当成 empty catalog。
+14. 不同 EnvironmentSession 的同名工具不互相覆盖。
+15. Stardew-shaped Runtime fixture 可以进入 catalog 和 TurnToolView snapshot。
 ```
 
 本阶段不以完整 Context Engine、Budget、BuildReport 或 Stardew 最终实机效果作为验收条件。
@@ -579,14 +644,14 @@ Review Phase7.2 时重点看：
 6. diagnostics 是否保持最小，没有变成 BuildReport。
 7. bootstrap 的 catalog / diagnostics / error 语义是否统一。
 8. schema 最小对象规则是否足够明确。
-9. 测试是否覆盖多 EnvironmentSession、重复 name、非法 schema / policy 和 Stardew happy path。
+9. 测试是否覆盖多 EnvironmentSession、重复 name、非法 schema / policy 和 Stardew-shaped Runtime fixture 回归。
 ```
 
 ---
 
 # 9. 下一阶段衔接
 
-Phase7.2 完成后，Phase7.3 可以同时消费：
+Phase7.2 完成后，Phase7.3 可以同时消费 Phase7.1 的身份与定义输入，以及 Phase7.2 已捕获完成的 turn 级工具快照：
 
 ```text
 Phase7.1:
@@ -596,9 +661,10 @@ Phase7.1:
     canonical Target EntityRef
 
 Phase7.2:
-    EnvironmentToolCatalog
     TurnToolView snapshot
     最小 Tool diagnostics
 ```
+
+Phase7.2 产出的 `EnvironmentToolCatalog` 保持在 Gateway / Tool Runtime / AgentTurn setup 边界。Phase7.3 Context Engine 不直接消费 `EnvironmentToolCatalog`，只消费已经捕获完成的 `TurnToolView snapshot`。
 
 Phase7.3 负责把 Definition、Observation、Memory、Transcript 和 Tool View 组合成结构化 Context Projection。Phase7.2 不负责最终 Context 选择和预算裁剪。
