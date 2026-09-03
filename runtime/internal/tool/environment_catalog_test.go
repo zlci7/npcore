@@ -100,6 +100,66 @@ func TestBuildEnvironmentToolCatalogBuildsValidatedCatalog(t *testing.T) {
 	}
 }
 
+func TestBuildEnvironmentToolCatalogAcceptsStardewShapedCapabilities(t *testing.T) {
+	capabilities := stardewShapedCapabilities(t)
+	catalog, diagnostics, err := BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Revision:     1,
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		t.Fatalf("BuildEnvironmentToolCatalog returned error: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("catalog is nil")
+	}
+
+	wantNames := []string{"emote", "face_player", "move_to", "present_dialogue"}
+	if got := toolNames(catalog.Available()); !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("catalog Available names = %v, want %v", got, wantNames)
+	}
+	if got := toolNames(catalog.Snapshot().Available()); !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("snapshot Available names = %v, want %v", got, wantNames)
+	}
+	if got := diagnostics.AcceptedToolNames; !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("AcceptedToolNames = %v, want %v", got, wantNames)
+	}
+	if diagnostics.AcceptedToolCount != 4 || diagnostics.CatalogToolCount != 4 {
+		t.Fatalf("diagnostics counts = accepted %d catalog %d, want 4/4", diagnostics.AcceptedToolCount, diagnostics.CatalogToolCount)
+	}
+
+	byName := capabilitiesByName(capabilities)
+	view := catalog.Snapshot()
+	for _, name := range wantNames {
+		catalogEntry, ok := catalog.Lookup(name)
+		if !ok {
+			t.Fatalf("catalog Lookup(%s) = false, want true", name)
+		}
+		viewEntry, ok := view.Lookup(name)
+		if !ok {
+			t.Fatalf("snapshot Lookup(%s) = false, want true", name)
+		}
+		if !reflect.DeepEqual(viewEntry, catalogEntry) {
+			t.Fatalf("snapshot entry for %s = %+v, want catalog entry %+v", name, viewEntry, catalogEntry)
+		}
+		if catalogEntry.Definition.InputSchema != byName[name].GetInputSchemaJson() {
+			t.Fatalf("%s schema was not preserved", name)
+		}
+		if catalogEntry.Concurrency != ConcurrencySequential {
+			t.Fatalf("%s concurrency = %q, want sequential", name, catalogEntry.Concurrency)
+		}
+	}
+
+	assertStardewToolMode(t, catalog, "emote", ExecutionSync, ToolPolicy{})
+	assertStardewToolMode(t, catalog, "face_player", ExecutionSync, ToolPolicy{})
+	assertStardewToolMode(t, catalog, "move_to", ExecutionAsync, ToolPolicy{})
+	assertStardewToolMode(t, catalog, "present_dialogue", ExecutionSync, ToolPolicy{ExclusivePerStep: true, SettleAfterSuccess: true})
+
+	assertSchemaContains(t, catalog, "emote", `"enum":["happy","sad","surprised","neutral"]`)
+	assertSchemaContains(t, catalog, "present_dialogue", `"maxItems":3`, `"allow_free_text":{"type":"boolean","default":true}`)
+	assertSchemaContains(t, catalog, "face_player", `"properties":{}`)
+	assertSchemaContains(t, catalog, "move_to", `"tile"`, `"x":{"type":"integer"}`, `"y":{"type":"integer"}`)
+}
+
 func TestBuildEnvironmentToolCatalogEntityIDScopeSemantics(t *testing.T) {
 	t.Run("unset entity id is environment level", func(t *testing.T) {
 		catalog, diagnostics, err := BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
@@ -295,5 +355,82 @@ func viewToolDefinition(name string) model.ToolDefinition {
 		Name:        name,
 		Description: strings.ToUpper(name),
 		InputSchema: `{"type":"object"}`,
+	}
+}
+
+func stardewShapedCapabilities(t *testing.T) []*protocolv1alpha2.Capability {
+	t.Helper()
+
+	return []*protocolv1alpha2.Capability{
+		{
+			Name:            "emote",
+			Version:         "0.1.0",
+			Description:     "Displays one emote bubble above the NPC.",
+			InputSchemaJson: `{"type":"object","properties":{"emote":{"type":"string","enum":["happy","sad","surprised","neutral"]}},"required":["emote"],"additionalProperties":false}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+		},
+		{
+			Name:            "present_dialogue",
+			Version:         "0.1.0",
+			Description:     "Displays NPC dialogue with optional reply options or free-text input for the player. Stardew shows up to three reply options; allow_free_text=true also shows the free-text input. It must be the only tool call in its model response. After it succeeds, the current turn ends; wait for player_said_to_npc before continuing that conversation. To end the conversation after the NPC line, pass allow_free_text=false and reply_options=[].",
+			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string","maxLength":240},"reply_options":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":80}},"allow_free_text":{"type":"boolean","default":true}},"required":["text"],"additionalProperties":false}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+			Extensions:      toolPolicyExtensions(t, true, true),
+		},
+		{
+			Name:            "face_player",
+			Version:         "0.1.0",
+			Description:     "Turns the NPC to face the player when both are in the same location.",
+			InputSchemaJson: `{"type":"object","properties":{},"additionalProperties":false}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+		},
+		{
+			Name:            "move_to",
+			Version:         "0.1.0",
+			Description:     "Moves the NPC toward a reachable tile in the current location. The action is asynchronous; wait for the terminal result before deciding the next step.",
+			InputSchemaJson: `{"type":"object","properties":{"location":{"type":"string"},"tile":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"],"additionalProperties":false}},"required":["location","tile"],"additionalProperties":false}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC,
+			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+		},
+	}
+}
+
+func capabilitiesByName(capabilities []*protocolv1alpha2.Capability) map[string]*protocolv1alpha2.Capability {
+	byName := make(map[string]*protocolv1alpha2.Capability, len(capabilities))
+	for _, capability := range capabilities {
+		byName[capability.GetName()] = capability
+	}
+	return byName
+}
+
+func assertStardewToolMode(t *testing.T, catalog *EnvironmentToolCatalog, name string, execution ExecutionMode, policy ToolPolicy) {
+	t.Helper()
+
+	entry, ok := catalog.Lookup(name)
+	if !ok {
+		t.Fatalf("Lookup(%s) = false, want true", name)
+	}
+	if entry.Execution != execution {
+		t.Fatalf("%s execution = %q, want %q", name, entry.Execution, execution)
+	}
+	if entry.Policy != policy {
+		t.Fatalf("%s policy = %+v, want %+v", name, entry.Policy, policy)
+	}
+}
+
+func assertSchemaContains(t *testing.T, catalog *EnvironmentToolCatalog, name string, values ...string) {
+	t.Helper()
+
+	entry, ok := catalog.Lookup(name)
+	if !ok {
+		t.Fatalf("Lookup(%s) = false, want true", name)
+	}
+	for _, value := range values {
+		if !strings.Contains(entry.Definition.InputSchema, value) {
+			t.Fatalf("%s schema missing %q: %s", name, value, entry.Definition.InputSchema)
+		}
 	}
 }

@@ -375,6 +375,96 @@ func TestHandleEventRejectsNilEnvironmentToolCatalog(t *testing.T) {
 	}
 }
 
+func TestHandleEventCompletesSettleOnlyWithEmptyEnvironmentToolCatalog(t *testing.T) {
+	catalog := mustEnvironmentToolCatalog(t, nil)
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle},
+			},
+		}},
+	}
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := env.observeCount; got != 1 {
+		t.Fatalf("Observe count = %d, want 1", got)
+	}
+	if got := len(env.submittedActions); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(provider.requests))
+	}
+	if got := len(provider.requests[0].Tools); got != 0 {
+		t.Fatalf("model-visible tool count = %d, want 0", got)
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	assertTurnCompletionScope(t, completion, "event_1", key)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED {
+		t.Fatalf("completion status = %s, want completed", completion.Status)
+	}
+}
+
+func TestHandleEventReturnsToolNotRegisteredWithEmptyEnvironmentToolCatalog(t *testing.T) {
+	catalog := mustEnvironmentToolCatalog(t, nil)
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{
+						ID:        "call_1",
+						Name:      "speak",
+						Arguments: map[string]any{"text": "hello"},
+					}},
+					Control: model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := len(env.submittedActions); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want retry step", got)
+	}
+	for index, req := range provider.requests {
+		if got := len(req.Tools); got != 0 {
+			t.Fatalf("request %d tool count = %d, want 0", index, got)
+		}
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "tool_not_registered") {
+		t.Fatalf("second request missing tool_not_registered result: %+v", provider.requests[1].Messages)
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	assertTurnCompletionScope(t, completion, "event_1", key)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED {
+		t.Fatalf("completion status = %s, want completed", completion.Status)
+	}
+}
+
 func TestHandleEventUsesTurnToolViewForModelRequestAndScheduler(t *testing.T) {
 	catalog := mustEnvironmentToolCatalog(t, []*protocolv1alpha2.Capability{
 		{
@@ -2509,6 +2599,14 @@ func TestMultiStepTraceEventsShareTurnIDAndIncreaseStepIndex(t *testing.T) {
 	}
 	if stepEvents[0].Fields["step_index"] != 1 || stepEvents[1].Fields["step_index"] != 2 {
 		t.Fatalf("step indices = %+v, %+v; want 1 then 2", stepEvents[0].Fields, stepEvents[1].Fields)
+	}
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want 2", got)
+	}
+	for index, req := range provider.requests {
+		if len(req.Tools) != 1 || req.Tools[0].Name != "speak" {
+			t.Fatalf("request %d tools = %+v, want speak from the same turn view", index, req.Tools)
+		}
 	}
 }
 

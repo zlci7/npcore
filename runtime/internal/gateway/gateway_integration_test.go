@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -80,6 +81,64 @@ func (p *scriptedGatewayProvider) Generate(ctx context.Context, req model.Reques
 }
 
 func (p *scriptedGatewayProvider) Requests() []model.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]model.Request, len(p.requests))
+	copy(out, p.requests)
+	return out
+}
+
+type sameNameToolGatewayProvider struct {
+	mu       sync.Mutex
+	requests []model.Request
+}
+
+func (p *sameNameToolGatewayProvider) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, req)
+	p.mu.Unlock()
+
+	if requestMessagesContain(req.Messages, "action_succeeded") {
+		return model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle},
+			},
+		}, nil
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != "shared_action" {
+		return model.Response{}, fmt.Errorf("unexpected tools for shared action request: %+v", req.Tools)
+	}
+	schema := req.Tools[0].InputSchema
+	switch {
+	case strings.Contains(schema, `"text"`):
+		return model.Response{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_shared_text",
+					Name:      "shared_action",
+					Arguments: map[string]any{"text": "alpha"},
+				}},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		}, nil
+	case strings.Contains(schema, `"value"`):
+		return model.Response{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_shared_value",
+					Name:      "shared_action",
+					Arguments: map[string]any{"value": "beta"},
+				}},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		}, nil
+	default:
+		return model.Response{}, fmt.Errorf("unexpected shared_action schema: %s", schema)
+	}
+}
+
+func (p *sameNameToolGatewayProvider) Requests() []model.Request {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -1482,6 +1541,78 @@ func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestConnectKeepsSameNameToolsIsolatedPerEnvironmentSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	provider := &sameNameToolGatewayProvider{}
+	loop := agent.NewLoop(provider, trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	firstStream := connectReadyStreamWithCapabilities(t, ctx, client, "session:shared-text", capabilityListWithSharedTextActionMessage)
+	secondStream := connectReadyStreamWithCapabilities(t, ctx, client, "session:shared-value", capabilityListWithSharedValueActionMessage)
+
+	firstObserveMessage := sendAcceptedNPCEvent(t, firstStream, 1, "npc:Linus", "Linus")
+	if err := firstStream.Send(observationMessageForNPC(firstObserveMessage.MessageId, "npc:Linus", "Linus")); err != nil {
+		t.Fatalf("send first observation: %v", err)
+	}
+	firstAction := recvRuntimeMessage(t, firstStream).GetAction()
+	if firstAction == nil || firstAction.Capability != "shared_action" {
+		t.Fatalf("first action = %+v, want shared_action", firstAction)
+	}
+	if got := firstAction.GetArguments().GetFields()["text"].GetStringValue(); got != "alpha" {
+		t.Fatalf("first action text = %q, want alpha", got)
+	}
+	if _, ok := firstAction.GetArguments().GetFields()["value"]; ok {
+		t.Fatalf("first action arguments = %+v, want no value field", firstAction.GetArguments().GetFields())
+	}
+	if err := firstStream.Send(actionResultMessage(firstAction.ActionId)); err != nil {
+		t.Fatalf("send first action result: %v", err)
+	}
+	recvTurnCompletion(t, firstStream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+
+	secondObserveMessage := sendAcceptedNPCEvent(t, secondStream, 2, "npc:Linus", "Linus")
+	if err := secondStream.Send(observationMessageForNPC(secondObserveMessage.MessageId, "npc:Linus", "Linus")); err != nil {
+		t.Fatalf("send second observation: %v", err)
+	}
+	secondAction := recvRuntimeMessage(t, secondStream).GetAction()
+	if secondAction == nil || secondAction.Capability != "shared_action" {
+		t.Fatalf("second action = %+v, want shared_action", secondAction)
+	}
+	if got := secondAction.GetArguments().GetFields()["value"].GetStringValue(); got != "beta" {
+		t.Fatalf("second action value = %q, want beta", got)
+	}
+	if _, ok := secondAction.GetArguments().GetFields()["text"]; ok {
+		t.Fatalf("second action arguments = %+v, want no text field", secondAction.GetArguments().GetFields())
+	}
+	if err := secondStream.Send(actionResultMessage(secondAction.ActionId)); err != nil {
+		t.Fatalf("send second action result: %v", err)
+	}
+	recvTurnCompletion(t, secondStream, "event_2", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+
+	requests := provider.Requests()
+	if got := len(requests); got != 3 {
+		t.Fatalf("provider request count = %d, want first stream one step and second stream two steps", got)
+	}
+	assertSharedActionRequestSchema(t, requests[0], `"text"`, `"value"`)
+	assertSharedActionRequestSchema(t, requests[1], `"value"`, `"text"`)
+	assertSharedActionRequestSchema(t, requests[2], `"value"`, `"text"`)
+
+	if err := firstStream.CloseSend(); err != nil {
+		t.Fatalf("close first stream: %v", err)
+	}
+	if err := secondStream.CloseSend(); err != nil {
+		t.Fatalf("close second stream: %v", err)
+	}
+}
+
 func TestConnectDoesNotLeakMemoryAcrossNPCs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1862,6 +1993,23 @@ func requestMessagesContain(messages []model.Message, needle string) bool {
 	return false
 }
 
+func assertSharedActionRequestSchema(t *testing.T, req model.Request, wantToken string, unwantedToken string) {
+	t.Helper()
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("request tools = %+v, want exactly one shared_action tool", req.Tools)
+	}
+	if req.Tools[0].Name != "shared_action" {
+		t.Fatalf("request tool name = %q, want shared_action", req.Tools[0].Name)
+	}
+	if !strings.Contains(req.Tools[0].InputSchema, wantToken) {
+		t.Fatalf("shared_action schema missing %s: %s", wantToken, req.Tools[0].InputSchema)
+	}
+	if strings.Contains(req.Tools[0].InputSchema, unwantedToken) {
+		t.Fatalf("shared_action schema unexpectedly contains %s: %s", unwantedToken, req.Tools[0].InputSchema)
+	}
+}
+
 func startGatewayServer(t *testing.T, grpcServer *grpc.Server, listener *bufconn.Listener) {
 	t.Helper()
 
@@ -2055,6 +2203,44 @@ func capabilityListWithEntityIDMessage(correlationID string, entityID string) *p
 	msg := capabilityListMessage(correlationID)
 	msg.GetCapabilities().EntityId = &entityID
 	return msg
+}
+
+func capabilityListWithSharedTextActionMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return capabilityListWithSharedActionMessage(
+		correlationID,
+		`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`,
+		toolPolicyExtensionsForGateway(false, true),
+	)
+}
+
+func capabilityListWithSharedValueActionMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return capabilityListWithSharedActionMessage(
+		correlationID,
+		`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
+		nil,
+	)
+}
+
+func capabilityListWithSharedActionMessage(correlationID string, inputSchema string, extensions *structpb.Struct) *protocolv1alpha2.AdapterMessage {
+	capability := &protocolv1alpha2.Capability{
+		Name:            "shared_action",
+		Version:         "0.1.0",
+		Description:     "A stream-local test action.",
+		InputSchemaJson: inputSchema,
+		ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+		Extensions:      extensions,
+	}
+	return &protocolv1alpha2.AdapterMessage{
+		MessageId:     "capabilities_msg_1",
+		CorrelationId: correlationID,
+		Payload: &protocolv1alpha2.AdapterMessage_Capabilities{
+			Capabilities: &protocolv1alpha2.CapabilityList{
+				Capabilities: []*protocolv1alpha2.Capability{capability},
+				Revision:     1,
+			},
+		},
+	}
 }
 
 func capabilityListWithEmoteMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
