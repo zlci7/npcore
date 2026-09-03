@@ -199,7 +199,7 @@ func TestLoadCatalogFromDirLoadsStaticDefinitionFiles(t *testing.T) {
   "narrative_constraints": ["Stay grounded in Stardew Valley."],
   "source_version": "test"
 }`)
-	writeFile(t, filepath.Join(root, " stardew-valley", "definitions", "agents", "abigail.json"), `{
+	writeFile(t, filepath.Join(root, " stardew-valley", "definitions", "abigail.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "stardew-valley",
   "definition_id": "npc:Abigail",
@@ -325,7 +325,7 @@ func TestLoadCatalogFromDirRejectsInvalidAgentFiles(t *testing.T) {
   "schema_version": "v1alpha1",
   "game_id": "stardew-valley"
 }`)
-			writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "agents", "abigail.json"), tt.content)
+			writeFile(t, filepath.Join(root, "stardew-valley", "definitions", "abigail.json"), tt.content)
 
 			_, err := definition.LoadCatalogFromDir(root)
 			if err == nil {
@@ -338,23 +338,24 @@ func TestLoadCatalogFromDirRejectsInvalidAgentFiles(t *testing.T) {
 	}
 }
 
-func TestLoadCatalogFromDirRejectsUnreadableAgentPath(t *testing.T) {
+func TestLoadCatalogFromDirIgnoresNestedAgentDirectory(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "game-a", "definitions", "game.json"), `{
   "schema_version": "v1alpha1",
   "game_id": "game-a"
 }`)
-	agentsPath := filepath.Join(root, "game-a", "definitions", "agents")
-	if err := os.WriteFile(agentsPath, []byte("not a directory"), 0o600); err != nil {
-		t.Fatalf("write agents path: %v", err)
-	}
+	writeFile(t, filepath.Join(root, "game-a", "definitions", "agents", "nested.json"), `{
+  "schema_version": "v1alpha1",
+  "game_id": "game-a",
+  "definition_id": "npc:Nested"
+}`)
 
-	_, err := definition.LoadCatalogFromDir(root)
-	if err == nil {
-		t.Fatal("LoadCatalogFromDir returned nil error, want unreadable agents path error")
+	catalog, err := definition.LoadCatalogFromDir(root)
+	if err != nil {
+		t.Fatalf("LoadCatalogFromDir returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "read agent definitions") {
-		t.Fatalf("error = %v, want read agent definitions", err)
+	if _, ok := catalog.FindAgent("game-a", "npc:Nested"); ok {
+		t.Fatal("FindAgent found nested agent definition, want flat definitions only")
 	}
 }
 

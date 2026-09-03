@@ -33,7 +33,7 @@ func LoadCatalogFromDir(root string) (Catalog, error) {
 			games = append(games, game)
 		}
 
-		loadedAgents, err := loadAgentDefinitions(filepath.Join(definitionsDir, "agents"), gameID)
+		loadedAgents, err := loadAgentDefinitions(definitionsDir, gameID)
 		if err != nil {
 			return Catalog{}, err
 		}
@@ -82,7 +82,7 @@ func loadAgentDefinitions(agentsDir string, pathGameID string) ([]AgentDefinitio
 
 	agents := make([]AgentDefinition, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || entry.Name() == "game.json" || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
 		path := filepath.Join(agentsDir, entry.Name())

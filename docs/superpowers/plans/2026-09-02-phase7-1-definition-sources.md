@@ -87,9 +87,9 @@
 
 **Files:**
 - Create: `runtime/config/games/stardew-valley/definitions/game.json`
-- Create: `runtime/config/games/stardew-valley/definitions/agents/npc-abigail.json`
-- Create: `runtime/config/games/stardew-valley/definitions/agents/npc-linus.json`
-- Create: `runtime/config/games/stardew-valley/definitions/agents/archetype-town-villager.json`
+- Create: `runtime/config/games/stardew-valley/definitions/npc-abigail.json`
+- Create: `runtime/config/games/stardew-valley/definitions/npc-linus.json`
+- Create: `runtime/config/games/stardew-valley/definitions/archetype-town-villager.json`
 - Modify: focused loader/context/gateway tests as needed.
 
 **Interfaces:**

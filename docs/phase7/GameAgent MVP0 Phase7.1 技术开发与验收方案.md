@@ -287,7 +287,7 @@ FindAgent(game_id, definition_id) -> AgentDefinition, bool
 
 ```text
 runtime/config/games/stardew-valley/definitions/game.json
-runtime/config/games/stardew-valley/definitions/agents/*.json
+runtime/config/games/stardew-valley/definitions/*.json
 ```
 
 Phase7.1 采用这个目录进入代码实现。
@@ -428,7 +428,7 @@ Renderer 临时渲染 Definition 内容，证明模型输入可以看到这些�
 
 ```text
 runtime/config/games/stardew-valley/definitions/game.json
-runtime/config/games/stardew-valley/definitions/agents/*.json
+runtime/config/games/stardew-valley/definitions/*.json
 ```
 
 职责：
