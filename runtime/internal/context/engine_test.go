@@ -9,6 +9,7 @@ import (
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	agentcontext "gameagent/runtime/internal/context"
 	"gameagent/runtime/internal/definition"
+	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 )
@@ -375,6 +376,110 @@ func TestEngineBuildDoesNotInferContextFactsFromPayloadOrObservationState(t *tes
 	}
 	if got := projection.CurrentEvent.Payload["context_facts"]; got == nil {
 		t.Fatal("CurrentEvent payload lost context_facts key; want payload preserved as generic JSON")
+	}
+}
+
+func TestEngineBuildProjectsRecentMemorySelection(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{MemoryContextSizeLimit: 4096})
+	input := validEngineInput(t)
+	input.Event.GameTime = &protocolv1alpha2.GameTime{
+		Year:   ptrInt32(1),
+		Season: ptrInt32(1),
+		Day:    ptrInt32(2),
+		Hour:   ptrInt32(6),
+		Minute: ptrInt32(20),
+	}
+	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
+	input.RecentMemories = []memory.Record{
+		{
+			MemoryID:            "memory-seq-2",
+			GameTime:            gameTime,
+			SourceEventSequence: 2,
+			Outcomes: []memory.TurnOutcome{{
+				ToolName: "present_dialogue",
+				ToolArguments: map[string]any{
+					"text":            "I brought snacks.",
+					"allow_free_text": true,
+				},
+				ActionStatus: "ACTION_STATUS_SUCCEEDED",
+			}},
+		},
+		{
+			MemoryID:            "memory-seq-1",
+			GameTime:            gameTime,
+			SourceEventSequence: 1,
+			SourceContextFacts: []memory.SourceContextFact{{
+				Kind:          "utterance",
+				ActorEntityID: "player:local",
+				Text:          "Meet me at the mine.",
+			}},
+		},
+		{
+			MemoryID: "memory-future",
+			GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 8, Minute: 0},
+			SourceContextFacts: []memory.SourceContextFact{{
+				Kind:          "utterance",
+				ActorEntityID: "player:local",
+				Text:          "This future fact must be filtered.",
+			}},
+		},
+	}
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got, want := len(projection.RecentMemory), 2; got != want {
+		t.Fatalf("RecentMemory length = %d, want %d", got, want)
+	}
+	if projection.RecentMemory[0].MemoryID != "memory-seq-1" || projection.RecentMemory[1].MemoryID != "memory-seq-2" {
+		t.Fatalf("RecentMemory order = %+v, want sequence order memory-seq-1 then memory-seq-2", projection.RecentMemory)
+	}
+	if got, want := projection.RecentMemory[0].TimeRelation, "today 06:20"; got != want {
+		t.Fatalf("first TimeRelation = %q, want %q", got, want)
+	}
+	if got, want := projection.RecentMemory[0].Summaries, []string{`player:local said "Meet me at the mine."`}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first summaries = %#v, want %#v", got, want)
+	}
+	wantOutcome := `tool "present_dialogue" status "ACTION_STATUS_SUCCEEDED" arguments {"allow_free_text":true,"text":"I brought snacks."}`
+	if got, want := projection.RecentMemory[1].Summaries, []string{wantOutcome}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second summaries = %#v, want %#v", got, want)
+	}
+}
+
+func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{MemoryContextSizeLimit: 95})
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{
+		{
+			MemoryID: "old",
+			SourceContextFacts: []memory.SourceContextFact{{
+				Kind:          "utterance",
+				ActorEntityID: "player:local",
+				Text:          "older memory should be trimmed by the soft limit",
+			}},
+		},
+		{
+			MemoryID: "new",
+			SourceContextFacts: []memory.SourceContextFact{{
+				Kind:          "utterance",
+				ActorEntityID: "player:local",
+				Text:          "newest memory is retained",
+			}},
+		},
+	}
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got, want := len(projection.RecentMemory), 1; got != want {
+		t.Fatalf("RecentMemory length = %d, want %d", got, want)
+	}
+	if projection.RecentMemory[0].MemoryID != "new" {
+		t.Fatalf("retained memory = %q, want newest memory", projection.RecentMemory[0].MemoryID)
 	}
 }
 

@@ -215,7 +215,7 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 	for _, want := range []string{
 		"[Recent Memory]",
 		"previous interaction",
-		`said "remember this line"`,
+		`tool "speak" status "ACTION_STATUS_SUCCEEDED" arguments {"text":"remember this line"}`,
 		"remember this line",
 	} {
 		if !strings.Contains(secondContent, want) {
@@ -224,7 +224,6 @@ func TestHandleEventLoadsRecentMemoryOnLaterTurn(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"event_1",
-		"ACTION_STATUS_SUCCEEDED",
 		"source_turn_id",
 	} {
 		if strings.Contains(secondContent, unwanted) {
@@ -822,7 +821,7 @@ func TestWithMemoryStoreNilDoesNotDisableDefaultMemoryStore(t *testing.T) {
 		t.Fatalf("provider request count = %d, want 2", len(provider.requests))
 	}
 	secondContent := provider.requests[1].Messages[0].Content
-	if !strings.Contains(secondContent, `said "remember this line"`) {
+	if !strings.Contains(secondContent, `tool "speak" status "ACTION_STATUS_SUCCEEDED" arguments {"text":"remember this line"}`) {
 		t.Fatalf("nil memory store option should keep default store; second request:\n%s", secondContent)
 	}
 }

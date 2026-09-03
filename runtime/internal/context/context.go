@@ -48,6 +48,8 @@ type ContextProjection struct {
 	CurrentEvent             EventProjection
 	CurrentEventContextFacts []ContextFactProjection
 
+	RecentMemory []MemoryProjection
+
 	Tools []model.ToolDefinition
 
 	Transcript []model.Message
@@ -72,6 +74,12 @@ type ContextFactProjection struct {
 	Text           string         `json:"text,omitempty"`
 	Label          string         `json:"label,omitempty"`
 	Attributes     map[string]any `json:"attributes,omitempty"`
+}
+
+type MemoryProjection struct {
+	MemoryID     string   `json:"memory_id,omitempty"`
+	TimeRelation string   `json:"time_relation,omitempty"`
+	Summaries    []string `json:"summaries,omitempty"`
 }
 
 type BuildInput struct {
@@ -115,6 +123,7 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		Observation:              input.Observation,
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
+		RecentMemory:             projectRecentMemories(input.RecentMemories, e.config.MemoryContextSizeLimit, currentGameTimeFromEventObservation(input.Event, input.Observation)),
 		Tools:                    input.TurnToolView.Available(),
 		Transcript:               copyMessages(input.Transcript),
 	}, nil

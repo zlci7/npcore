@@ -291,7 +291,7 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 	for _, want := range []string{
 		"[Recent Memory]",
 		"today 06:20",
-		`said "hello from last turn"`,
+		`tool "speak" status "ACTION_STATUS_SUCCEEDED" arguments {"text":"hello from last turn"}`,
 		"hello from last turn",
 		"[Agent Descriptor]",
 		"entity_id: npc:Abigail",
@@ -814,7 +814,7 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 	content := req.Messages[0].Content
 	for _, want := range []string{
 		"today 06:20",
-		`used emote "happy"`,
+		`tool "emote" arguments {"emote":"happy"}`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("rendered content missing %q:\n%s", want, content)
@@ -853,7 +853,7 @@ func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	assertContainsAll(t, content, `presented dialogue "Want to explore the mines?"`, "faced player")
+	assertContainsAll(t, content, `tool "present_dialogue" arguments {"text":"Want to explore the mines?"}`, `tool "face_player"`)
 }
 
 func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
@@ -901,7 +901,7 @@ func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
 
 	content := req.Messages[0].Content
 	wantFact := `player:local said "Let's go fishing."`
-	wantOutcome := `presented dialogue "Sure."`
+	wantOutcome := `tool "present_dialogue" arguments {"text":"Sure."}`
 	assertContainsAll(t, content, wantFact, wantOutcome)
 	if strings.Index(content, wantFact) > strings.Index(content, wantOutcome) {
 		t.Fatalf("context fact should render before action outcome:\n%s", content)
@@ -956,7 +956,7 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	assertContainsAll(t, content, `said "current request"`)
+	assertContainsAll(t, content, `tool "speak" arguments {"text":"current request"}`)
 	if strings.Contains(content, "future request") {
 		t.Fatalf("future memory should be filtered before budget trim:\n%s", content)
 	}
@@ -1028,10 +1028,10 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	first := strings.Index(content, `said "first"`)
-	second := strings.Index(content, `said "second"`)
-	unknown := strings.Index(content, `said "unknown time"`)
-	later := strings.Index(content, `said "later"`)
+	first := strings.Index(content, `tool "speak" arguments {"text":"first"}`)
+	second := strings.Index(content, `tool "speak" arguments {"text":"second"}`)
+	unknown := strings.Index(content, `tool "speak" arguments {"text":"unknown time"}`)
+	later := strings.Index(content, `tool "speak" arguments {"text":"later"}`)
 	if first == -1 || second == -1 || first > second {
 		t.Fatalf("equal game time memories should render by source event sequence:\n%s", content)
 	}
@@ -1090,8 +1090,8 @@ func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	withSequence := strings.Index(content, `said "with sequence"`)
-	missingSequence := strings.Index(content, `said "missing sequence"`)
+	withSequence := strings.Index(content, `tool "speak" arguments {"text":"with sequence"}`)
+	missingSequence := strings.Index(content, `tool "speak" arguments {"text":"missing sequence"}`)
 	if withSequence == -1 || missingSequence == -1 || withSequence > missingSequence {
 		t.Fatalf("records with missing source event sequence should keep MemoryStore order:\n%s", content)
 	}
@@ -1128,7 +1128,7 @@ func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	assertContainsAll(t, content, `said "hello"`, `used emote "happy"`)
+	assertContainsAll(t, content, `tool "speak" arguments {"text":"hello"}`, `tool "emote" arguments {"emote":"happy"}`)
 }
 
 func TestRendererMarksPreviousDayMemory(t *testing.T) {
@@ -1172,7 +1172,7 @@ func TestRendererMarksPreviousDayMemory(t *testing.T) {
 	content := req.Messages[0].Content
 	for _, want := range []string{
 		"previous day Y1 S1 D2 18:20",
-		`said "see you tomorrow"`,
+		`tool "speak" arguments {"text":"see you tomorrow"}`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("rendered content missing %q:\n%s", want, content)
