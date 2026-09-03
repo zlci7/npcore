@@ -10,6 +10,7 @@ import (
 	agentcontext "gameagent/runtime/internal/context"
 	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/memory"
+	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 )
@@ -487,6 +488,109 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 	}
 }
 
+func TestEngineBuildProjectsBoundedRecentMemoryToolArguments(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
+		MemoryContextSizeLimit:        4096,
+		MaxToolResultOutputBytes:      300,
+		MaxToolResultOutputDepth:      2,
+		MaxToolResultOutputFields:     2,
+		MaxToolResultOutputArrayItems: 2,
+	})
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{{
+		Outcomes: []memory.TurnOutcome{{
+			ToolName: "inspect",
+			ToolArguments: map[string]any{
+				"a": []any{"one", "two", "three"},
+				"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
+				"c": "extra field",
+			},
+			ActionStatus: "ACTION_STATUS_SUCCEEDED",
+		}},
+	}}
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	summary := projection.RecentMemory[0].Summaries[0]
+	assertStringContainsAll(t, summary, `tool "inspect"`, `status "ACTION_STATUS_SUCCEEDED"`, `"a":["one","two","_truncated_items:1"]`, "_truncated")
+	for _, unwanted := range []string{"three", "extra field", "too deep"} {
+		if strings.Contains(summary, unwanted) {
+			t.Fatalf("bounded memory arguments leaked %q:\n%s", unwanted, summary)
+		}
+	}
+}
+
+func TestEngineBuildProjectsCurrentTurnTranscriptWithBounds(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
+		MaxToolResultOutputBytes:      300,
+		MaxToolResultOutputDepth:      2,
+		MaxToolResultOutputFields:     2,
+		MaxToolResultOutputArrayItems: 2,
+	})
+	input := validEngineInput(t)
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_1",
+				Name: "inspect",
+				Arguments: map[string]any{
+					"a": []any{"one", "two", "three"},
+					"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
+					"c": "extra field",
+				},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_1",
+				Name:       "inspect",
+				Status:     "rejected",
+				Code:       "adapter_rejected",
+				Message:    "adapter rejected request\nstack trace line\n{\"raw\":\"json\",\"action_id\":\"runtime-action-123\"}" + strings.Repeat("x", 180),
+				Output: map[string]any{
+					"a": []any{"one", "two", "three"},
+					"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
+					"c": "extra field",
+				},
+			}},
+		},
+	}
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got, want := len(projection.CurrentTurnTranscript), 2; got != want {
+		t.Fatalf("CurrentTurnTranscript length = %d, want %d", got, want)
+	}
+	callArgs := projection.CurrentTurnTranscript[0].ToolCalls[0].Arguments
+	if _, ok := callArgs["c"]; ok {
+		t.Fatalf("projected tool call arguments leaked extra field: %#v", callArgs)
+	}
+	if got := callArgs["a"]; !reflect.DeepEqual(got, []any{"one", "two", "_truncated_items:1"}) {
+		t.Fatalf("projected tool call arguments[a] = %#v", got)
+	}
+	result := projection.CurrentTurnTranscript[1].ToolResults[0]
+	if strings.Contains(result.Message, "stack trace") || strings.Contains(result.Message, "runtime-action-123") || strings.Contains(result.Message, `{"raw"`) {
+		t.Fatalf("projected tool result message leaked raw diagnostic: %q", result.Message)
+	}
+	if len(result.Message) > 120 {
+		t.Fatalf("projected tool result message length = %d, want <= 120", len(result.Message))
+	}
+	if _, ok := result.Output["c"]; ok {
+		t.Fatalf("projected tool result output leaked extra field: %#v", result.Output)
+	}
+	if got := result.Output["a"]; !reflect.DeepEqual(got, []any{"one", "two", "_truncated_items:1"}) {
+		t.Fatalf("projected tool result output[a] = %#v", got)
+	}
+}
+
 func validEngineInput(t *testing.T) agentcontext.BuildInput {
 	t.Helper()
 
@@ -552,6 +656,16 @@ func assertInvalidInputError(t *testing.T, err error, want string) {
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %v, want message containing %q", err, want)
+	}
+}
+
+func assertStringContainsAll(t *testing.T, content string, values ...string) {
+	t.Helper()
+
+	for _, want := range values {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content missing %q:\n%s", want, content)
+		}
 	}
 }
 

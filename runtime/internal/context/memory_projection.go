@@ -1,7 +1,6 @@
 package context
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,7 +9,7 @@ import (
 	"gameagent/runtime/internal/memory"
 )
 
-func projectRecentMemories(records []memory.Record, limit int, currentTime *memory.GameTimeSnapshot) []MemoryProjection {
+func projectRecentMemories(records []memory.Record, limit int, currentTime *memory.GameTimeSnapshot, bounds projectionBounds) []MemoryProjection {
 	if len(records) == 0 {
 		return nil
 	}
@@ -18,12 +17,12 @@ func projectRecentMemories(records []memory.Record, limit int, currentTime *memo
 	selected := selectTimelineMemories(records, currentTime)
 	projections := make([]MemoryProjection, 0, len(selected))
 	for _, record := range selected {
-		projections = append(projections, projectRecentMemory(record, currentTime))
+		projections = append(projections, projectRecentMemory(record, currentTime, bounds))
 	}
 	return trimMemoryProjections(projections, limit)
 }
 
-func projectRecentMemory(record memory.Record, currentTime *memory.GameTimeSnapshot) MemoryProjection {
+func projectRecentMemory(record memory.Record, currentTime *memory.GameTimeSnapshot, bounds projectionBounds) MemoryProjection {
 	summaries := make([]string, 0, len(record.SourceContextFacts)+len(record.Outcomes))
 	for _, fact := range record.SourceContextFacts {
 		if summary := visibleContextFactSummary(fact); summary != "" {
@@ -31,7 +30,7 @@ func projectRecentMemory(record memory.Record, currentTime *memory.GameTimeSnaps
 		}
 	}
 	for _, outcome := range record.Outcomes {
-		summaries = append(summaries, visibleActionSummary(outcome))
+		summaries = append(summaries, visibleActionSummary(outcome, bounds))
 	}
 	if len(summaries) == 0 {
 		summaries = append(summaries, "completed turn")
@@ -155,7 +154,7 @@ func visibleContextFactSummary(fact memory.SourceContextFact) string {
 	}
 }
 
-func visibleActionSummary(outcome memory.TurnOutcome) string {
+func visibleActionSummary(outcome memory.TurnOutcome, bounds projectionBounds) string {
 	parts := []string{"tool"}
 	if name := strings.TrimSpace(outcome.ToolName); name != "" {
 		parts[0] = fmt.Sprintf("tool %q", name)
@@ -164,20 +163,12 @@ func visibleActionSummary(outcome memory.TurnOutcome) string {
 		parts = append(parts, fmt.Sprintf("status %q", status))
 	}
 	if len(outcome.ToolArguments) > 0 {
-		parts = append(parts, fmt.Sprintf("arguments %s", stableJSON(outcome.ToolArguments)))
+		parts = append(parts, fmt.Sprintf("arguments %s", stableCompactJSON(projectToolArguments(outcome.ToolArguments, bounds))))
 	}
 	if len(parts) == 1 && parts[0] == "tool" {
 		return "completed a visible action"
 	}
 	return strings.Join(parts, " ")
-}
-
-func stableJSON(value any) string {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return "{}"
-	}
-	return string(data)
 }
 
 func currentGameTimeFromEventObservation(event *protocolv1alpha2.GameEvent, observation *protocolv1alpha2.Observation) *memory.GameTimeSnapshot {

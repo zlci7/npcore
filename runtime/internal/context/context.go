@@ -48,7 +48,7 @@ type ContextProjection struct {
 
 	Tools []model.ToolDefinition
 
-	Transcript []model.Message
+	CurrentTurnTranscript []model.Message
 }
 
 type EventProjection struct {
@@ -114,6 +114,7 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		return ContextProjection{}, err
 	}
 
+	bounds := projectionBoundsFromEngineConfig(e.config)
 	return ContextProjection{
 		SessionKey:               input.SessionKey,
 		CanonicalTarget:          input.CanonicalTarget,
@@ -124,9 +125,9 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
 		CurrentObservation:       projectCurrentObservation(input.Observation),
-		RecentMemory:             projectRecentMemories(input.RecentMemories, e.config.MemoryContextSizeLimit, currentGameTimeFromEventObservation(input.Event, input.Observation)),
+		RecentMemory:             projectRecentMemories(input.RecentMemories, e.config.MemoryContextSizeLimit, currentGameTimeFromEventObservation(input.Event, input.Observation), bounds),
 		Tools:                    input.TurnToolView.Available(),
-		Transcript:               copyMessages(input.Transcript),
+		CurrentTurnTranscript:    projectCurrentTurnTranscript(input.Transcript, bounds),
 	}, nil
 }
 
@@ -276,6 +277,7 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 	descriptor := input.AgentDescriptor
 	descriptor.SessionKey = input.SessionKey
 
+	bounds := defaultProjectionBounds()
 	return AgentContext{
 		SessionKey:               input.SessionKey,
 		AgentDescriptor:          descriptor,
@@ -285,9 +287,9 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
 		CurrentObservation:       projectCurrentObservation(input.Observation),
-		RecentMemory:             projectRecentMemories(input.RecentMemories, 0, currentGameTimeFromEventObservation(input.Event, input.Observation)),
+		RecentMemory:             projectRecentMemories(input.RecentMemories, 0, currentGameTimeFromEventObservation(input.Event, input.Observation), bounds),
 		Tools:                    append([]model.ToolDefinition(nil), input.Tools...),
-		Transcript:               copyMessages(input.Transcript),
+		CurrentTurnTranscript:    projectCurrentTurnTranscript(input.Transcript, bounds),
 	}, nil
 }
 
@@ -312,20 +314,6 @@ func copyAgentDefinition(agent *definition.AgentDefinition) *definition.AgentDef
 	out.Preferences = append([]string(nil), agent.Preferences...)
 	out.BehaviorGuidelines = append([]string(nil), agent.BehaviorGuidelines...)
 	return &out
-}
-
-func copyMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	out := make([]model.Message, len(messages))
-	for i, message := range messages {
-		out[i] = message
-		out[i].ToolCalls = copyToolCalls(message.ToolCalls)
-		out[i].ToolResults = copyToolResults(message.ToolResults)
-	}
-	return out
 }
 
 func copyToolCalls(calls []model.ToolCall) []model.ToolCall {

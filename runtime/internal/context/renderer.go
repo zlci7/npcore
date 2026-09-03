@@ -3,7 +3,6 @@ package context
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"gameagent/runtime/internal/definition"
@@ -18,14 +17,13 @@ type RendererConfig struct {
 	MaxToolResultOutputArrayItems int
 }
 
-type Renderer struct {
-	config RendererConfig
-}
+type Renderer struct{}
 
 // NewRenderer 创建 AgentContext Renderer。
 // Renderer 负责把结构化上下文变成 Provider 可以消费的模型请求。
+// config 保留为构造兼容参数；投影选择和本地上限由 Engine 处理。
 func NewRenderer(config RendererConfig) Renderer {
-	return Renderer{config: config}
+	return Renderer{}
 }
 
 // Render 负责把 ContextProjection 转成 Provider Request。
@@ -37,7 +35,7 @@ func (r Renderer) Render(projection ContextProjection) (model.Request, error) {
 			Content: r.renderUserMessage(projection),
 		},
 	}
-	messages = append(messages, r.renderTranscript(projection.Transcript)...)
+	messages = append(messages, r.renderTranscript(projection.CurrentTurnTranscript)...)
 
 	return model.Request{
 		System:   projection.RuntimePolicy,
@@ -63,7 +61,7 @@ func (r Renderer) renderTranscript(transcript []model.Message) []model.Message {
 			Role:        message.Role,
 			Content:     strings.TrimSpace(message.Content),
 			ToolCalls:   copyToolCalls(message.ToolCalls),
-			ToolResults: r.normalizeToolResults(message.ToolResults),
+			ToolResults: copyToolResults(message.ToolResults),
 		}
 
 		switch {
@@ -107,172 +105,6 @@ func renderToolResults(results []model.ToolResult) string {
 		items = append(items, item)
 	}
 	return mustMarshalJSONString(items)
-}
-
-func (r Renderer) normalizeToolResults(results []model.ToolResult) []model.ToolResult {
-	if len(results) == 0 {
-		return nil
-	}
-
-	normalized := make([]model.ToolResult, len(results))
-	for i, result := range results {
-		normalized[i] = result
-		normalized[i].Message = sanitizeToolResultMessage(result.Message)
-		normalized[i].Output = r.projectToolResultOutput(result.Output)
-	}
-	return normalized
-}
-
-func sanitizeToolResultMessage(message string) string {
-	message = strings.TrimSpace(strings.ReplaceAll(message, "\r\n", "\n"))
-	if message == "" {
-		return ""
-	}
-	if index := strings.Index(message, "\n"); index >= 0 {
-		message = strings.TrimSpace(message[:index])
-	}
-	if index := strings.Index(message, "{"); index >= 0 {
-		message = strings.TrimSpace(message[:index])
-	}
-	if len([]rune(message)) <= 120 {
-		return message
-	}
-	runes := []rune(message)
-	return strings.TrimSpace(string(runes[:120]))
-}
-
-func (r Renderer) projectToolResultOutput(output map[string]any) map[string]any {
-	if len(output) == 0 {
-		return nil
-	}
-
-	bounds := r.toolResultOutputBounds()
-	projected, ok := projectOutputValue(output, 1, bounds).(map[string]any)
-	if !ok || len(projected) == 0 {
-		return nil
-	}
-
-	data, err := json.Marshal(orderedMap(projected))
-	if err == nil && bounds.maxBytes > 0 && len(data) > bounds.maxBytes {
-		return map[string]any{
-			"_truncated": "tool result output exceeded byte limit",
-		}
-	}
-	return projected
-}
-
-type toolResultOutputBounds struct {
-	maxBytes      int
-	maxDepth      int
-	maxFields     int
-	maxArrayItems int
-}
-
-func (r Renderer) toolResultOutputBounds() toolResultOutputBounds {
-	return toolResultOutputBounds{
-		maxBytes:      positiveOrDefault(r.config.MaxToolResultOutputBytes, 8192),
-		maxDepth:      positiveOrDefault(r.config.MaxToolResultOutputDepth, 4),
-		maxFields:     positiveOrDefault(r.config.MaxToolResultOutputFields, 64),
-		maxArrayItems: positiveOrDefault(r.config.MaxToolResultOutputArrayItems, 32),
-	}
-}
-
-func positiveOrDefault(value int, fallback int) int {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}
-
-func projectOutputValue(value any, depth int, bounds toolResultOutputBounds) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		if bounds.maxDepth > 0 && depth > bounds.maxDepth {
-			return "_truncated: max depth exceeded"
-		}
-		return projectOutputMap(typed, depth, bounds)
-	case []any:
-		if bounds.maxDepth > 0 && depth > bounds.maxDepth {
-			return "_truncated: max depth exceeded"
-		}
-		return projectOutputArray(typed, depth, bounds)
-	case string, bool, nil:
-		return typed
-	case int:
-		return typed
-	case int32:
-		return typed
-	case int64:
-		return typed
-	case float32:
-		return typed
-	case float64:
-		return typed
-	default:
-		return fmt.Sprintf("%v", typed)
-	}
-}
-
-func projectOutputMap(values map[string]any, depth int, bounds toolResultOutputBounds) map[string]any {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	limit := len(keys)
-	if bounds.maxFields > 0 && limit > bounds.maxFields {
-		limit = bounds.maxFields
-	}
-
-	out := make(map[string]any, limit+1)
-	for _, key := range keys[:limit] {
-		out[key] = projectOutputValue(values[key], depth+1, bounds)
-	}
-	if limit < len(keys) {
-		out["_truncated_fields"] = len(keys) - limit
-	}
-	return out
-}
-
-func projectOutputArray(values []any, depth int, bounds toolResultOutputBounds) []any {
-	limit := len(values)
-	if bounds.maxArrayItems > 0 && limit > bounds.maxArrayItems {
-		limit = bounds.maxArrayItems
-	}
-
-	out := make([]any, 0, limit+1)
-	for _, value := range values[:limit] {
-		out = append(out, projectOutputValue(value, depth+1, bounds))
-	}
-	if limit < len(values) {
-		out = append(out, fmt.Sprintf("_truncated_items:%d", len(values)-limit))
-	}
-	return out
-}
-
-func orderedMap(values map[string]any) map[string]any {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]any, len(values))
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		out[key] = values[key]
-	}
-	return out
-}
-
-func mustMarshalJSONString(value any) string {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
 }
 
 // renderUserMessage 渲染本轮模型输入的 user message。

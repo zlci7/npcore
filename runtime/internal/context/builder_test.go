@@ -424,6 +424,16 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 			TimeRelation: "today 06:20",
 			Summaries:    []string{"projected memory summary"},
 		}},
+		CurrentTurnTranscript: []model.Message{{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_projected",
+				Name:       "speak",
+				Status:     "succeeded",
+				Code:       "action_succeeded",
+				Output:     map[string]any{"line": "projected transcript"},
+			}},
+		}},
 		Tools: []model.ToolDefinition{tool},
 	}
 
@@ -443,6 +453,10 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 		"[Current Observation]",
 		`"weather": "sunny"`,
 	)
+	if len(req.Messages) != 2 {
+		t.Fatalf("message count = %d, want user context plus projected transcript", len(req.Messages))
+	}
+	assertContainsAll(t, req.Messages[1].Content, "call_projected", "projected transcript")
 }
 
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
@@ -744,20 +758,23 @@ func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
 }
 
 func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit:        1024,
+	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
+	target := &protocolv1alpha2.EntityRef{EntityId: key.EntityID, DefinitionId: key.EntityID}
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
 		MaxToolResultOutputBytes:      300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,
 	})
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
-		RuntimePolicy: "policy",
-		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
-		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+	projection, err := engine.Build(agentcontext.BuildInput{
+		SessionKey:      key,
+		CanonicalTarget: target,
+		AgentDescriptor: definition.NewAgentInstanceDescriptor(key, target),
+		RuntimePolicy:   "policy",
+		Event:           &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
+		Observation:     &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
 		Transcript: []model.Message{{
 			Role: model.RoleTool,
 			ToolResults: []model.ToolResult{{
@@ -774,10 +791,10 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("Build returned error: %v", err)
+		t.Fatalf("Engine.Build returned error: %v", err)
 	}
 
-	req, err := renderer.Render(agentCtx)
+	req, err := renderer.Render(projection)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
