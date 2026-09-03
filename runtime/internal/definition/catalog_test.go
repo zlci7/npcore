@@ -240,7 +240,42 @@ func TestLoadCatalogFromDirLoadsBundledStardewDefinitions(t *testing.T) {
 		t.Fatalf("bundled Stardew game definition should include title and summary: %+v", game)
 	}
 
-	for _, definitionID := range []string{"npc:Abigail", "npc:Linus", "archetype:town_villager"} {
+	for _, definitionID := range []string{
+		"npc:Abigail",
+		"npc:Alex",
+		"npc:Caroline",
+		"npc:Clint",
+		"npc:Demetrius",
+		"npc:Dwarf",
+		"npc:Elliott",
+		"npc:Emily",
+		"npc:Evelyn",
+		"npc:George",
+		"npc:Gus",
+		"npc:Haley",
+		"npc:Harvey",
+		"npc:Jas",
+		"npc:Jodi",
+		"npc:Kent",
+		"npc:Krobus",
+		"npc:Leah",
+		"npc:Lewis",
+		"npc:Linus",
+		"npc:Marnie",
+		"npc:Maru",
+		"npc:Pam",
+		"npc:Penny",
+		"npc:Pierre",
+		"npc:Robin",
+		"npc:Sam",
+		"npc:Sandy",
+		"npc:Sebastian",
+		"npc:Shane",
+		"npc:Vincent",
+		"npc:Willy",
+		"npc:Wizard",
+		"archetype:town_villager",
+	} {
 		agent, ok := catalog.FindAgent("stardew-valley", definitionID)
 		if !ok {
 			t.Fatalf("FindAgent did not find bundled %s definition", definitionID)
@@ -253,6 +288,20 @@ func TestLoadCatalogFromDirLoadsBundledStardewDefinitions(t *testing.T) {
 		}
 		if agent.Identity == "" {
 			t.Fatalf("%s identity is empty", definitionID)
+		}
+		if definitionID != "archetype:town_villager" {
+			if len(agent.Personality) == 0 {
+				t.Fatalf("%s personality is empty", definitionID)
+			}
+			if len(agent.SpeechStyle) == 0 {
+				t.Fatalf("%s speech_style is empty", definitionID)
+			}
+			if len(agent.BehaviorGuidelines) == 0 {
+				t.Fatalf("%s behavior_guidelines is empty", definitionID)
+			}
+			if agent.SourceVersion != "manual-valleytalk-inspired-draft" {
+				t.Fatalf("%s SourceVersion = %q, want manual-valleytalk-inspired-draft", definitionID, agent.SourceVersion)
+			}
 		}
 	}
 }

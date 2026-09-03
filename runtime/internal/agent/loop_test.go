@@ -576,14 +576,14 @@ func TestHandleEventRendersDifferentBundledStardewDefinitions(t *testing.T) {
 	linusContent := provider.requests[1].Messages[0].Content
 	assertRequestContentContains(t, abigailContent,
 		"title: Stardew Valley",
-		"identity: Abigail is an adventurous Pelican Town villager who is drawn to music, games, and the mines.",
+		"identity: Abigail is a young Pelican Town resident with a taste for adventure, music, games, and the unusual.",
 		"entity_id: npc:Abigail",
 		"display_name: Abigail",
 		"definition_id: npc:Abigail",
 	)
 	assertRequestContentContains(t, linusContent,
 		"title: Stardew Valley",
-		"identity: Linus is a self-reliant villager who lives close to nature near the mountain.",
+		"identity: Linus is a self-reliant mountain dweller who lives close to nature and values his chosen independence.",
 		"entity_id: npc:Linus",
 		"display_name: Linus",
 		"definition_id: npc:Linus",
