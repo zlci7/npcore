@@ -2,6 +2,7 @@ package context_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -269,6 +270,114 @@ func TestEngineBuildRejectsDefinitionBindingMismatches(t *testing.T) {
 	}
 }
 
+func TestEngineBuildProjectsCurrentEventAndContextFactsSeparately(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
+	input := validEngineInput(t)
+	input.Event.Sequence = 42
+	input.Event.GameTime = &protocolv1alpha2.GameTime{
+		Year:   ptrInt32(1),
+		Season: ptrInt32(2),
+		Day:    ptrInt32(3),
+		Hour:   ptrInt32(6),
+		Minute: ptrInt32(20),
+		Tick:   ptrInt64(9001),
+	}
+	input.Event.Payload = mustStruct(t, map[string]any{
+		"dialogue_id": "intro",
+		"nested": map[string]any{
+			"mood": "curious",
+		},
+	})
+	input.Event.ContextFacts = []*protocolv1alpha2.ContextFact{
+		{
+			Kind:           "utterance",
+			ActorEntityId:  "player:local",
+			TargetEntityId: "npc:Abigail",
+			ScopeId:        "conversation:1",
+			Text:           "  Want to explore the mines?  ",
+			Label:          "  player invite  ",
+			Attributes: mustStruct(t, map[string]any{
+				"tone": "friendly",
+			}),
+		},
+		{
+			Kind:  "scene",
+			Label: "rainy day",
+		},
+	}
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	event := projection.CurrentEvent
+	if event.EventID != "event-1" || event.EventType != "player_interacted_with_npc" {
+		t.Fatalf("CurrentEvent identity = %+v, want event-1/player_interacted_with_npc", event)
+	}
+	if event.WorldID != "world-a" || event.TargetEntityID != "npc:Abigail" || event.Sequence != 42 {
+		t.Fatalf("CurrentEvent scope = %+v, want world-a/npc:Abigail/42", event)
+	}
+	if event.GameTime == nil || event.GameTime.GetTick() != 9001 {
+		t.Fatalf("CurrentEvent.GameTime = %+v, want copied game time", event.GameTime)
+	}
+	if event.CanonicalTarget.GetDefinitionId() != "npc/abigail" {
+		t.Fatalf("CurrentEvent.CanonicalTarget = %+v, want canonical target", event.CanonicalTarget)
+	}
+	if got := event.Payload["dialogue_id"]; got != "intro" {
+		t.Fatalf("CurrentEvent.Payload[dialogue_id] = %#v, want intro", got)
+	}
+	eventJSON := mustMarshalJSONBytes(t, event)
+	if strings.Contains(string(eventJSON), "context_facts") || strings.Contains(string(eventJSON), "ContextFacts") {
+		t.Fatalf("CurrentEvent unexpectedly contains context facts: %s", eventJSON)
+	}
+
+	facts := projection.CurrentEventContextFacts
+	if got, want := len(facts), 2; got != want {
+		t.Fatalf("CurrentEventContextFacts length = %d, want %d", got, want)
+	}
+	if facts[0].Kind != "utterance" ||
+		facts[0].ActorEntityID != "player:local" ||
+		facts[0].TargetEntityID != "npc:Abigail" ||
+		facts[0].ScopeID != "conversation:1" ||
+		facts[0].Text != "Want to explore the mines?" ||
+		facts[0].Label != "player invite" {
+		t.Fatalf("first fact projection = %+v, want trimmed utterance fact", facts[0])
+	}
+	if got, want := facts[0].Attributes, map[string]any{"tone": "friendly"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first fact attributes = %#v, want %#v", got, want)
+	}
+	if facts[1].Kind != "scene" || facts[1].Label != "rainy day" {
+		t.Fatalf("second fact projection = %+v, want scene/rainy day", facts[1])
+	}
+}
+
+func TestEngineBuildDoesNotInferContextFactsFromPayloadOrObservationState(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
+	input := validEngineInput(t)
+	input.Event.Payload = mustStruct(t, map[string]any{
+		"context_facts": []any{
+			map[string]any{"kind": "utterance", "text": "payload should not become a fact"},
+		},
+	})
+	input.Observation.State = mustStruct(t, map[string]any{
+		"context_facts": []any{
+			map[string]any{"kind": "scene", "label": "state should not become a fact"},
+		},
+	})
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got := len(projection.CurrentEventContextFacts); got != 0 {
+		t.Fatalf("CurrentEventContextFacts length = %d, want 0", got)
+	}
+	if got := projection.CurrentEvent.Payload["context_facts"]; got == nil {
+		t.Fatal("CurrentEvent payload lost context_facts key; want payload preserved as generic JSON")
+	}
+}
+
 func validEngineInput(t *testing.T) agentcontext.BuildInput {
 	t.Helper()
 
@@ -335,4 +444,8 @@ func assertInvalidInputError(t *testing.T, err error, want string) {
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %v, want message containing %q", err, want)
 	}
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
 }

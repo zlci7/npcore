@@ -3,6 +3,7 @@ package context
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/definition"
@@ -44,9 +45,33 @@ type ContextProjection struct {
 	Event       *protocolv1alpha2.GameEvent
 	Observation *protocolv1alpha2.Observation
 
+	CurrentEvent             EventProjection
+	CurrentEventContextFacts []ContextFactProjection
+
 	Tools []model.ToolDefinition
 
 	Transcript []model.Message
+}
+
+type EventProjection struct {
+	EventID         string                      `json:"event_id,omitempty"`
+	EventType       string                      `json:"event_type,omitempty"`
+	WorldID         string                      `json:"world_id,omitempty"`
+	TargetEntityID  string                      `json:"target_entity_id,omitempty"`
+	Sequence        uint64                      `json:"sequence,omitempty"`
+	GameTime        *protocolv1alpha2.GameTime  `json:"game_time,omitempty"`
+	CanonicalTarget *protocolv1alpha2.EntityRef `json:"canonical_target,omitempty"`
+	Payload         map[string]any              `json:"payload,omitempty"`
+}
+
+type ContextFactProjection struct {
+	Kind           string         `json:"kind,omitempty"`
+	ActorEntityID  string         `json:"actor_entity_id,omitempty"`
+	TargetEntityID string         `json:"target_entity_id,omitempty"`
+	ScopeID        string         `json:"scope_id,omitempty"`
+	Text           string         `json:"text,omitempty"`
+	Label          string         `json:"label,omitempty"`
+	Attributes     map[string]any `json:"attributes,omitempty"`
 }
 
 type BuildInput struct {
@@ -79,17 +104,19 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 	}
 
 	return ContextProjection{
-		SessionKey:      input.SessionKey,
-		CanonicalTarget: input.CanonicalTarget,
-		AgentDescriptor: input.AgentDescriptor,
-		GameDefinition:  copyGameDefinition(input.GameDefinition),
-		AgentDefinition: copyAgentDefinition(input.AgentDefinition),
-		RuntimePolicy:   input.RuntimePolicy,
-		RecentMemories:  append([]memory.Record(nil), input.RecentMemories...),
-		Event:           input.Event,
-		Observation:     input.Observation,
-		Tools:           input.TurnToolView.Available(),
-		Transcript:      copyMessages(input.Transcript),
+		SessionKey:               input.SessionKey,
+		CanonicalTarget:          input.CanonicalTarget,
+		AgentDescriptor:          input.AgentDescriptor,
+		GameDefinition:           copyGameDefinition(input.GameDefinition),
+		AgentDefinition:          copyAgentDefinition(input.AgentDefinition),
+		RuntimePolicy:            input.RuntimePolicy,
+		RecentMemories:           append([]memory.Record(nil), input.RecentMemories...),
+		Event:                    input.Event,
+		Observation:              input.Observation,
+		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
+		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
+		Tools:                    input.TurnToolView.Available(),
+		Transcript:               copyMessages(input.Transcript),
 	}, nil
 }
 
@@ -162,6 +189,51 @@ func validateEngineInput(input BuildInput) error {
 		}
 	}
 	return nil
+}
+
+func projectCurrentEvent(event *protocolv1alpha2.GameEvent, canonicalTarget *protocolv1alpha2.EntityRef) EventProjection {
+	payload := map[string]any(nil)
+	if event.GetPayload() != nil {
+		payload = copyMap(event.GetPayload().AsMap())
+	}
+
+	return EventProjection{
+		EventID:         event.GetEventId(),
+		EventType:       event.GetEventType(),
+		WorldID:         event.GetWorldId(),
+		TargetEntityID:  event.GetTargetEntityId(),
+		Sequence:        event.GetSequence(),
+		GameTime:        event.GetGameTime(),
+		CanonicalTarget: canonicalTarget,
+		Payload:         payload,
+	}
+}
+
+func projectCurrentEventContextFacts(facts []*protocolv1alpha2.ContextFact) []ContextFactProjection {
+	if len(facts) == 0 {
+		return nil
+	}
+
+	out := make([]ContextFactProjection, 0, len(facts))
+	for _, fact := range facts {
+		if fact == nil {
+			continue
+		}
+		attributes := map[string]any(nil)
+		if fact.GetAttributes() != nil {
+			attributes = copyMap(fact.GetAttributes().AsMap())
+		}
+		out = append(out, ContextFactProjection{
+			Kind:           strings.TrimSpace(fact.GetKind()),
+			ActorEntityID:  strings.TrimSpace(fact.GetActorEntityId()),
+			TargetEntityID: strings.TrimSpace(fact.GetTargetEntityId()),
+			ScopeID:        strings.TrimSpace(fact.GetScopeId()),
+			Text:           strings.TrimSpace(fact.GetText()),
+			Label:          strings.TrimSpace(fact.GetLabel()),
+			Attributes:     attributes,
+		})
+	}
+	return out
 }
 
 // Build 负责建立 AgentContext 边界。
