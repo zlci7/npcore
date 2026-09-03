@@ -4,7 +4,7 @@ World Is Agent is in experimental MVP0 development.
 
 This document is the public source of truth for current repository capabilities, validation scope, and known limits.
 
-Last updated: 2026-09-02.
+Last updated: 2026-09-03.
 
 ## Validation Scope
 
@@ -30,7 +30,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Identity | `AgentSessionKey = game_id + world_id + entity_id`. |
 | Scheduling | Per-EnvironmentSession same-agent FIFO lane scheduling. |
 | AgentTurn | Bounded multi-step turns with model/tool feedback. |
-| Tools | Runtime tools plus dynamic environment capabilities. |
+| Tools | EnvironmentSession-scoped dynamic capabilities with immutable Turn Tool View snapshots used by model exposure and Scheduler lookup. |
 | Tool policy | Capability metadata for exclusive-per-step and settle-after-success behavior. |
 | Actions | Sync action result handling and async action status/result handling. |
 | Turn completion | Runtime can send best-effort `TurnCompletion` to the adapter. |
@@ -57,7 +57,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Area | Current limit |
 | --- | --- |
 | Durable agent state | Memory is in-process and lost on runtime restart. |
-| Full Context Engine | Tool View snapshot, budgeted selection/cropping, BuildReport, and stable Context Projection layers remain future Phase7 work. |
+| Full Context Engine | Budgeted selection/cropping, BuildReport, and stable Context Projection layers remain future Phase7 work. |
 | Long-term semantic memory | No vector store, embedding index, or durable episodic memory backend. |
 | Automatic reconnect | Adapter reconnect and environment recovery are future work. |
 | Durable async continuation | Async action waiting is process-local. |

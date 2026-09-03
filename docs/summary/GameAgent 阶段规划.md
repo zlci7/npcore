@@ -6,7 +6,7 @@
 > **Status:** Roadmap Baseline
 > **Date:** 2026-09-02
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.7
-> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Accepted + Phase6.5 Accepted
+> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Accepted + Phase6.5 Accepted + Phase7.0 Accepted + Phase7.1 Accepted + Phase7.2 Accepted
 > **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)（2026-08-27）；[Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）；[Phase6.5 Stardew Dialogue Interaction Convergence](../phase6.5/GameAgent MVP0 Phase6.5 技术开发与验收方案.md)（2026-09-02 Accepted）；[GameAgent 阶段规划 v1.1 评审意见](./GameAgent_阶段规划_v1.1_评审意见.md)（2026-09-02）；Phase7 Context Subsystem Replan（2026-09-02）；Phase7 Contract Review（2026-09-02）；Phase7 Baseline Candidate Review（2026-09-02）；Phase7 Roadmap Baseline Freeze（2026-09-02）；Phase7.0 Contract Revision（2026-09-02）；Phase7.0 Gate Scope Correction（2026-09-02）；Phase7.0 Minor Review Correction（2026-09-02）；Phase7.0 Over-scope Guard Correction（2026-09-02）
 
 ---
@@ -1042,7 +1042,7 @@ Descriptor persistent store
 - Tool Runtime 负责校验 Capability，并为该 EnvironmentSession 构造完整、合法的 Environment Tool Catalog；
 - Tool Runtime 记录最小 bootstrap / consistency diagnostics，包括 capability 接受、拒绝、重复 name、schema / policy 问题和最终暴露工具；
 - Phase7.2 技术方案必须明确 `CapabilityList.entity_id` 的 MVP0 语义，不得把 entity-scoped capability 静默提升为 EnvironmentSession 全局能力；
-- AgentTurn 创建时，Runtime 根据 Environment Tool Catalog、Runtime Policy 和 Tool limits 形成不可变的最终 Turn Tool View snapshot；
+- AgentTurn 创建时，Runtime 从当前 Environment Tool Catalog 捕获不可变的 Turn Tool View snapshot；
 - AgentLoop 构建 Model Request 时使用最终 Turn Tool View；
 - Tool Scheduler 执行 ToolCall 时使用同一份最终 Turn Tool View；
 - 不同 EnvironmentSession 的 capability 不串线；
@@ -1068,9 +1068,9 @@ CapabilityList
     ↓
 Environment-scoped Tool Catalog
     ↓
-Runtime Policy / Tool limits
+AgentTurn snapshot capture
     ↓
-Final Turn Tool View snapshot
+Turn Tool View snapshot
     ├── Model Request.Tools
     └── Tool Scheduler.Lookup
 ```
@@ -1104,7 +1104,7 @@ Tool View persistent registry
 
 主要范围：
 
-- 建立 `ContextEngine.Build` 或等价主入口；
+- 建立 Context Engine 主入口，Go 类型使用 `Engine.Build`；
 - 将直接输入和加载结果统一投影为结构化 Context；
 - Current Event Projection 保留通用事件外壳，例如 event_type、game_time、target、sequence；
 - GameEvent payload 可以作为有界、通用 JSON 投影进入 Context，但 Runtime 不按 payload key 做 game-specific selection；
@@ -1134,9 +1134,9 @@ capability-driven visible summary metadata
 - Runtime 不按 `GameEvent.payload` key 做 Stardew-specific 解析，关键事件语义必须由 ContextFacts 提供；
 - `Recent Memory` 和 Tool outcome 渲染不按 `speak`、`emote`、`present_dialogue`、`face_player` 等具体工具名分支；
 - Gateway 保证 `AgentSessionKey.game_id` 来自当前 `AdapterHello.game_id` 所在的 ConnectionContext；
-- `ContextEngine.Build` 校验加载出的 Game / Agent Definition scope 与 `AgentSessionKey.game_id` 一致；
-- `ContextEngine.Build` 校验 `AgentSessionKey.world_id` 与 `GameEvent.world_id`、`Observation.world_id` 一致；
-- `ContextEngine.Build` 校验 `AgentSessionKey.entity_id` 与 `target_entity_id`、canonical Target EntityRef、`Observation.entity_id` 一致；
+- `Engine.Build` 校验加载出的 Game / Agent Definition scope 与 `AgentSessionKey.game_id` 一致；
+- `Engine.Build` 校验 `AgentSessionKey.world_id` 与 `GameEvent.world_id`、`Observation.world_id` 一致；
+- `Engine.Build` 校验 `AgentSessionKey.entity_id` 与 `target_entity_id`、canonical Target EntityRef、`Observation.entity_id` 一致；
 - Gateway / pre-turn validation 确认目标 `EntityRef` 唯一且无冲突，不按列表顺序选择第一个目标实体；
 - Agent Definition lookup 始终使用 `game_id + definition_id`，不能只按 `definition_id` 查询；
 - 任一必要 scope 不一致时，Context build 失败，不调用 Provider，不提交 Action。
