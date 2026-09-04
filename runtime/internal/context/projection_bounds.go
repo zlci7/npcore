@@ -22,10 +22,6 @@ func projectionBoundsFromEngineConfig(config EngineConfig) projectionBounds {
 	}
 }
 
-func defaultProjectionBounds() projectionBounds {
-	return projectionBoundsFromEngineConfig(EngineConfig{})
-}
-
 func positiveOrDefault(value int, fallback int) int {
 	if value > 0 {
 		return value

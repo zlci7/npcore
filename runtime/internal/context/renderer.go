@@ -19,7 +19,7 @@ type RendererConfig struct {
 
 type Renderer struct{}
 
-// NewRenderer 创建 AgentContext Renderer。
+// NewRenderer 创建 ContextProjection Renderer。
 // Renderer 负责把结构化上下文变成 Provider 可以消费的模型请求。
 // config 保留为构造兼容参数；投影选择和本地上限由 Engine 处理。
 func NewRenderer(config RendererConfig) Renderer {

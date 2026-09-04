@@ -12,15 +12,15 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+	"gameagent/runtime/internal/tool"
 
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestBuilderUsesInjectedDescriptorInsteadOfScanningEventEntities(t *testing.T) {
-	builder := agentcontext.NewBuilder()
+func TestEngineUsesInjectedDescriptorInsteadOfScanningEventEntities(t *testing.T) {
 	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"}
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey: key,
 		AgentDescriptor: definition.AgentInstanceDescriptor{
 			SessionKey:   key,
@@ -51,10 +51,8 @@ func TestBuilderUsesInjectedDescriptorInsteadOfScanningEventEntities(t *testing.
 	}
 }
 
-func TestBuilderDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+func TestEngineDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
 		Event: &protocolv1alpha2.GameEvent{
 			EventId:        "event-1",
@@ -79,35 +77,7 @@ func TestBuilderDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
 	}
 }
 
-func TestBuilderUsesInputSessionKeyAsDescriptorScope(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"}
-
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey: key,
-		AgentDescriptor: definition.AgentInstanceDescriptor{
-			SessionKey:   session.AgentSessionKey{GameID: "other-game", WorldID: "world-b", EntityID: "creature:beta"},
-			EntityType:   "creature",
-			DisplayName:  "Alpha",
-			DefinitionID: "villager/farmer",
-		},
-		Event:       &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
-		Observation: &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
-	})
-	if err != nil {
-		t.Fatalf("Build returned error: %v", err)
-	}
-
-	if agentCtx.AgentDescriptor.SessionKey != key {
-		t.Fatalf("AgentDescriptor.SessionKey = %+v, want %+v", agentCtx.AgentDescriptor.SessionKey, key)
-	}
-	if agentCtx.AgentDescriptor.DefinitionID != "villager/farmer" {
-		t.Fatalf("AgentDescriptor.DefinitionID = %q, want villager/farmer", agentCtx.AgentDescriptor.DefinitionID)
-	}
-}
-
-func TestBuilderUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
-	builder := agentcontext.NewBuilder()
+func TestEngineUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 	descriptor := definition.AgentInstanceDescriptor{
 		SessionKey:   session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
@@ -135,7 +105,7 @@ func TestBuilderUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
 		BehaviorGuidelines: []string{"Answer as the current creature instance."},
 	}
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:      descriptor.SessionKey,
 		AgentDescriptor: descriptor,
 		GameDefinition:  &gameDefinition,
@@ -180,10 +150,9 @@ func TestBuilderUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
 }
 
 func TestRendererOmitsFabricatedDefinitionsWhenFallbackIsUsed(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
 		AgentDescriptor: definition.AgentInstanceDescriptor{
 			SessionKey:  session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
@@ -218,13 +187,12 @@ func TestRendererOmitsFabricatedDefinitionsWhenFallbackIsUsed(t *testing.T) {
 }
 
 func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
-	tool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
+	speakTool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		AgentDescriptor: definition.AgentInstanceDescriptor{
 			SessionKey:   session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -264,7 +232,7 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 			}},
 			CreatedAt: time.Unix(100, 0),
 		}},
-		Tools: []model.ToolDefinition{tool},
+		TurnToolView: turnToolViewFromDefinitions(t, speakTool),
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -278,8 +246,8 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 	if req.System != "You are controlling an NPC in a game." {
 		t.Fatalf("System = %q", req.System)
 	}
-	if len(req.Tools) != 1 || req.Tools[0] != tool {
-		t.Fatalf("Tools = %+v, want %+v", req.Tools, []model.ToolDefinition{tool})
+	if len(req.Tools) != 1 || req.Tools[0] != speakTool {
+		t.Fatalf("Tools = %+v, want %+v", req.Tools, []model.ToolDefinition{speakTool})
 	}
 	if len(req.Messages) != 1 {
 		t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
@@ -319,10 +287,9 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 }
 
 func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "You are controlling an NPC in a game.",
 		Event: &protocolv1alpha2.GameEvent{
@@ -460,7 +427,6 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 }
 
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit:        1024,
 		MaxToolResultOutputBytes:      4096,
@@ -469,7 +435,7 @@ func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
 		MaxToolResultOutputArrayItems: 8,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1", TargetEntityId: "npc:Abigail"},
@@ -520,10 +486,9 @@ func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
 }
 
 func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
@@ -563,11 +528,10 @@ func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
 }
 
 func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 	longDiagnostic := "adapter rejected request\nstack trace line\n{\"raw\":\"json\",\"action_id\":\"runtime-action-123\"}" + strings.Repeat("x", 180)
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
@@ -602,10 +566,9 @@ func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
 }
 
 func TestRendererExposesSettleControlInstruction(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
@@ -629,7 +592,6 @@ func TestRendererExposesSettleControlInstruction(t *testing.T) {
 }
 
 func TestToolResultNormalizationIsDeterministic(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit:        1024,
 		MaxToolResultOutputBytes:      4096,
@@ -654,11 +616,11 @@ func TestToolResultNormalizationIsDeterministic(t *testing.T) {
 			}},
 		}},
 	}
-	firstCtx, err := builder.Build(input)
+	firstCtx, err := buildProjection(t, input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	secondCtx, err := builder.Build(input)
+	secondCtx, err := buildProjection(t, input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -680,10 +642,9 @@ func TestToolResultNormalizationIsDeterministic(t *testing.T) {
 }
 
 func TestToolResultNormalizationIsProviderNeutral(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
@@ -717,7 +678,6 @@ func TestToolResultNormalizationIsProviderNeutral(t *testing.T) {
 }
 
 func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit:        1024,
 		MaxToolResultOutputBytes:      4096,
@@ -726,7 +686,7 @@ func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
 		MaxToolResultOutputArrayItems: 8,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
@@ -841,12 +801,11 @@ func TestRendererRendersProjectedRecentMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -890,12 +849,11 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -924,12 +882,11 @@ func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -976,12 +933,9 @@ func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
 }
 
 func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 72,
-	})
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -1012,7 +966,7 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 7, Minute: 10},
 			},
 		},
-	})
+	}, agentcontext.EngineConfig{MemoryContextSizeLimit: 72})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -1030,13 +984,12 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 }
 
 func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -1108,13 +1061,12 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 }
 
 func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -1165,12 +1117,11 @@ func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
 }
 
 func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -1199,12 +1150,11 @@ func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
 }
 
 func TestRendererMarksPreviousDayMemory(t *testing.T) {
-	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
 		MemoryContextSizeLimit: 1024,
 	})
 
-	agentCtx, err := builder.Build(agentcontext.BuildInput{
+	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event: &protocolv1alpha2.GameEvent{
@@ -1247,16 +1197,90 @@ func TestRendererMarksPreviousDayMemory(t *testing.T) {
 	}
 }
 
-func TestBuilderRejectsMissingCurrentObservation(t *testing.T) {
-	builder := agentcontext.NewBuilder()
-
-	_, err := builder.Build(agentcontext.BuildInput{
+func TestEngineRejectsMissingCurrentObservation(t *testing.T) {
+	_, err := agentcontext.NewEngine(agentcontext.EngineConfig{}).Build(agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 		Event:      &protocolv1alpha2.GameEvent{EventId: "event-1"},
 	})
 	if err == nil {
 		t.Fatal("Build returned nil error, want structural failure")
 	}
+}
+
+func buildProjection(t *testing.T, input agentcontext.BuildInput, configs ...agentcontext.EngineConfig) (agentcontext.ContextProjection, error) {
+	t.Helper()
+
+	input = completeEngineInput(input)
+	config := agentcontext.EngineConfig{}
+	if len(configs) > 0 {
+		config = configs[0]
+	}
+	return agentcontext.NewEngine(config).Build(input)
+}
+
+func completeEngineInput(input agentcontext.BuildInput) agentcontext.BuildInput {
+	key := input.SessionKey
+	if input.RuntimePolicy == "" {
+		input.RuntimePolicy = "policy"
+	}
+	if input.CanonicalTarget == nil {
+		input.CanonicalTarget = &protocolv1alpha2.EntityRef{
+			EntityId:     key.EntityID,
+			EntityType:   input.AgentDescriptor.EntityType,
+			DisplayName:  input.AgentDescriptor.DisplayName,
+			DefinitionId: input.AgentDescriptor.DefinitionID,
+		}
+	}
+	if input.AgentDescriptor.SessionKey == (session.AgentSessionKey{}) {
+		input.AgentDescriptor.SessionKey = key
+	}
+	if input.AgentDescriptor.EntityType == "" {
+		input.AgentDescriptor.EntityType = input.CanonicalTarget.GetEntityType()
+	}
+	if input.AgentDescriptor.DisplayName == "" {
+		input.AgentDescriptor.DisplayName = input.CanonicalTarget.GetDisplayName()
+	}
+	if input.AgentDescriptor.DefinitionID == "" {
+		input.AgentDescriptor.DefinitionID = input.CanonicalTarget.GetDefinitionId()
+	}
+	if input.Event != nil {
+		if input.Event.WorldId == "" {
+			input.Event.WorldId = key.WorldID
+		}
+		if input.Event.TargetEntityId == "" {
+			input.Event.TargetEntityId = key.EntityID
+		}
+	}
+	if input.Observation != nil {
+		if input.Observation.WorldId == "" {
+			input.Observation.WorldId = key.WorldID
+		}
+		if input.Observation.EntityId == "" {
+			input.Observation.EntityId = key.EntityID
+		}
+	}
+	return input
+}
+
+func turnToolViewFromDefinitions(t *testing.T, definitions ...model.ToolDefinition) tool.TurnToolView {
+	t.Helper()
+
+	capabilities := make([]*protocolv1alpha2.Capability, 0, len(definitions))
+	for _, definition := range definitions {
+		capabilities = append(capabilities, &protocolv1alpha2.Capability{
+			Name:            definition.Name,
+			Description:     definition.Description,
+			InputSchemaJson: definition.InputSchema,
+		})
+	}
+
+	catalog, _, err := tool.BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		t.Fatalf("BuildEnvironmentToolCatalog returned error: %v", err)
+	}
+	return catalog.Snapshot()
 }
 
 func ptrInt32(value int32) *int32 {
