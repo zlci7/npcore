@@ -4,7 +4,7 @@ World Is Agent is in experimental MVP0 development.
 
 This document is the public source of truth for current repository capabilities, validation scope, and known limits.
 
-Last updated: 2026-09-03.
+Last updated: 2026-09-04.
 
 ## Validation Scope
 
@@ -36,7 +36,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Turn completion | Runtime can send best-effort `TurnCompletion` to the adapter. |
 | Memory | Process-local short-term memory scoped by AgentSession. |
 | Definitions | Optional static Runtime catalog for Game Definitions and Agent Definitions scoped by `game_id + definition_id`. |
-| Context | Context projection from observation, recent memory, tool results, runtime policy, optional static definitions, and Agent Instance Descriptor. |
+| Context | Runtime Context Engine builds stable Context Projection from event, ContextFacts, observation, recent memory, current-turn transcript, definitions, Agent Instance Descriptor, runtime policy, and Turn Tool View snapshot. |
 | Providers | Provider-neutral model interface with Fake, DeepSeek, and OpenAI implementations. |
 | Trace | JSONL turn trace written under `runtime/.local/traces.jsonl`. |
 
@@ -57,7 +57,7 @@ Stardew Valley is the first real adapter and validation environment.
 | Area | Current limit |
 | --- | --- |
 | Durable agent state | Memory is in-process and lost on runtime restart. |
-| Full Context Engine | Budgeted selection/cropping, BuildReport, and stable Context Projection layers remain future Phase7 work. |
+| Context Budget and BuildReport | Budgeted selection/cropping, tool size admission, BuildReport, and comprehensive context diagnostics remain future Phase7 work. |
 | Long-term semantic memory | No vector store, embedding index, or durable episodic memory backend. |
 | Automatic reconnect | Adapter reconnect and environment recovery are future work. |
 | Durable async continuation | Async action waiting is process-local. |

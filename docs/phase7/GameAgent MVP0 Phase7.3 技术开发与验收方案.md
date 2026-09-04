@@ -1,15 +1,16 @@
 # GameAgent MVP0 Phase7.3 技术开发与验收方案
 
-> **Status:** Implementation Plan Accepted
-> **Date:** 2026-09-03
+> **Status:** Accepted
+> **Date:** 2026-09-04
 > **Phase:** Phase7.3 Context Engine Core
 > **Roadmap Baseline:** [GameAgent 阶段规划](../summary/GameAgent%20阶段规划.md) v1.9
 > **Previous Gate:** Phase7.1 + Phase7.2 Accepted
 > **Review Required Before Coding:** Completed
 > **Code Baseline:** `main` @ `5cb4512`
+> **Accepted Commit:** `main` @ `d565273`
 > **Review Result:** Accepted
 > **Reviewer:** zlc7
-> **Review Date:** 2026-09-03
+> **Review Date:** 2026-09-04
 
 ---
 
@@ -900,7 +901,7 @@ Phase7.3 文档根据实际实现偏差更新
 
 ```text
 Phase7.3 验收条件逐条可证明
-公开状态不再把已完成的 Tool View snapshot 写成未来工作
+公开状态不再把已完成的 Tool View snapshot 或 Context Projection 写成未来工作
 ```
 
 ---
