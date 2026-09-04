@@ -362,6 +362,7 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 	tool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
 	projection := agentcontext.ContextProjection{
 		RuntimePolicy: "policy",
+		Instruction:   "Use only the projected instruction.",
 		AgentDescriptor: definition.AgentInstanceDescriptor{
 			SessionKey:   session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
 			EntityType:   "npc",
@@ -385,7 +386,15 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 		CurrentObservation: agentcontext.ObservationProjection{
 			WorldID:  "world-a",
 			EntityID: "npc:Abigail",
-			State:    map[string]any{"weather": "sunny"},
+			Revision: 9,
+			NearbyEntities: []*protocolv1alpha2.EntityRef{{
+				EntityId:     "player:local",
+				EntityType:   "player",
+				DisplayName:  "Player",
+				DefinitionId: "player/local",
+			}},
+			Extensions: map[string]any{"adapter_revision": "fixture-1"},
+			State:      map[string]any{"weather": "sunny"},
 		},
 		RecentMemory: []agentcontext.MemoryProjection{{
 			TimeRelation: "today 06:20",
@@ -418,12 +427,51 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 		"[Current Event Context Facts]",
 		`"text": "Projected fact."`,
 		"[Current Observation]",
+		`"revision": 9`,
+		`"nearby_entities":`,
+		`"entity_id": "player:local"`,
+		`"extensions":`,
+		`"adapter_revision": "fixture-1"`,
 		`"weather": "sunny"`,
+		"[Instruction]",
+		"Use only the projected instruction.",
 	)
+	if strings.Contains(content, "Current Observation is the current truth.") {
+		t.Fatalf("renderer injected the default instruction instead of consuming projection.Instruction:\n%s", content)
+	}
 	if len(req.Messages) != 2 {
 		t.Fatalf("message count = %d, want user context plus projected transcript", len(req.Messages))
 	}
 	assertContainsAll(t, req.Messages[1].Content, "call_projected", "projected transcript")
+}
+
+func TestRendererDoesNotInventInstructionWhenProjectionInstructionIsEmpty(t *testing.T) {
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	projection := agentcontext.ContextProjection{
+		RuntimePolicy: "policy",
+		CurrentEvent: agentcontext.EventProjection{
+			EventID:        "projected-event",
+			WorldID:        "world-a",
+			TargetEntityID: "npc:Abigail",
+		},
+		CurrentObservation: agentcontext.ObservationProjection{
+			WorldID:  "world-a",
+			EntityID: "npc:Abigail",
+		},
+	}
+
+	req, err := renderer.Render(projection)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	assertContainsAll(t, content, "[Instruction]")
+	if strings.Contains(content, "Current Observation is the current truth.") ||
+		strings.Contains(content, "Recent Memory is historical context.") ||
+		strings.Contains(content, "Return tool calls only when an environment action is needed.") {
+		t.Fatalf("renderer invented an instruction for empty projection.Instruction:\n%s", content)
+	}
 }
 
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {

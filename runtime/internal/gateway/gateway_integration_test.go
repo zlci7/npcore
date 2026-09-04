@@ -396,6 +396,75 @@ func TestConnectRejectsIllegalCapabilityListEntityScope(t *testing.T) {
 	}
 }
 
+func TestConnectAcceptsPaddedEventIdentityThroughContextBuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	provider := &scriptedGatewayProvider{}
+	loop := agent.NewLoop(provider, trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, "session:padded-event")
+
+	eventMessage := npcInteractionEventMessage()
+	event := eventMessage.GetEvent()
+	event.WorldId = " world:test "
+	event.TargetEntityId = "\tnpc:Linus\n"
+	if err := stream.Send(eventMessage); err != nil {
+		t.Fatalf("send padded game event: %v", err)
+	}
+
+	ack := recvRuntimeMessage(t, stream).GetEventAck()
+	if ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+
+	observeMessage := recvRuntimeMessage(t, stream)
+	observe := observeMessage.GetObserve()
+	if observe == nil {
+		t.Fatalf("expected observe request, got %+v", observeMessage.Payload)
+	}
+	if observe.WorldId != "world:test" {
+		t.Fatalf("observe world_id = %q, want trimmed world:test", observe.WorldId)
+	}
+	if observe.EntityId != "npc:Linus" {
+		t.Fatalf("observe entity_id = %q, want trimmed npc:Linus", observe.EntityId)
+	}
+
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	waitForGatewayProviderRequestCount(t, provider, 1)
+
+	requests := provider.Requests()
+	if got := len(requests); got != 1 {
+		t.Fatalf("provider request count = %d, want 1", got)
+	}
+	prompt := requests[0].Messages[0].Content
+	for _, want := range []string{`"world_id": "world:test"`, `"target_entity_id": "npc:Linus"`} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, unwanted := range []string{`"world_id": " world:test "`, `"target_entity_id": "\tnpc:Linus\n"`} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("prompt leaked padded event identity %q:\n%s", unwanted, prompt)
+		}
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
 func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

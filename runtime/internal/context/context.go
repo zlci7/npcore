@@ -15,6 +15,13 @@ import (
 
 var ErrInvalidInput = errors.New("invalid agent context input")
 
+const defaultAuthorityInstruction = `Current Observation is the current truth.
+Recent Memory is historical context.
+If Recent Memory conflicts with Current Observation, follow Current Observation.
+If Recent Memory is from today and current game time has not clearly advanced much, treat it as nearby conversation context, not proof that the player left and returned.
+
+Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.`
+
 type EngineConfig struct {
 	MemoryContextSizeLimit        int
 	MaxToolResultOutputBytes      int
@@ -37,6 +44,7 @@ type ContextProjection struct {
 	AgentDefinition *definition.AgentDefinition
 
 	RuntimePolicy string
+	Instruction   string
 
 	CurrentEvent             EventProjection
 	CurrentEventContextFacts []ContextFactProjection
@@ -71,10 +79,13 @@ type ContextFactProjection struct {
 }
 
 type ObservationProjection struct {
-	WorldID  string                     `json:"world_id,omitempty"`
-	EntityID string                     `json:"entity_id,omitempty"`
-	GameTime *protocolv1alpha2.GameTime `json:"game_time,omitempty"`
-	State    map[string]any             `json:"state,omitempty"`
+	WorldID        string                        `json:"world_id,omitempty"`
+	EntityID       string                        `json:"entity_id,omitempty"`
+	Revision       uint64                        `json:"revision,omitempty"`
+	GameTime       *protocolv1alpha2.GameTime    `json:"game_time,omitempty"`
+	NearbyEntities []*protocolv1alpha2.EntityRef `json:"nearby_entities,omitempty"`
+	Extensions     map[string]any                `json:"extensions,omitempty"`
+	State          map[string]any                `json:"state,omitempty"`
 }
 
 type MemoryProjection struct {
@@ -119,6 +130,7 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		GameDefinition:           copyGameDefinition(input.GameDefinition),
 		AgentDefinition:          copyAgentDefinition(input.AgentDefinition),
 		RuntimePolicy:            input.RuntimePolicy,
+		Instruction:              defaultAuthorityInstruction,
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
 		CurrentObservation:       projectCurrentObservation(input.Observation),
@@ -159,10 +171,12 @@ func validateEngineInput(input BuildInput) error {
 	if input.AgentDescriptor.DefinitionID != input.CanonicalTarget.GetDefinitionId() {
 		return fmt.Errorf("%w: agent descriptor definition_id does not match canonical target", ErrInvalidInput)
 	}
-	if input.Event.GetWorldId() != input.SessionKey.WorldID {
+	eventWorldID := strings.TrimSpace(input.Event.GetWorldId())
+	eventTargetEntityID := strings.TrimSpace(input.Event.GetTargetEntityId())
+	if eventWorldID != input.SessionKey.WorldID {
 		return fmt.Errorf("%w: event world_id does not match session key", ErrInvalidInput)
 	}
-	if input.Event.GetTargetEntityId() != input.SessionKey.EntityID {
+	if eventTargetEntityID != input.SessionKey.EntityID {
 		return fmt.Errorf("%w: event target_entity_id does not match session key", ErrInvalidInput)
 	}
 	if input.Observation.GetWorldId() != input.SessionKey.WorldID {
@@ -200,8 +214,8 @@ func projectCurrentEvent(event *protocolv1alpha2.GameEvent, canonicalTarget *pro
 	return EventProjection{
 		EventID:         event.GetEventId(),
 		EventType:       event.GetEventType(),
-		WorldID:         event.GetWorldId(),
-		TargetEntityID:  event.GetTargetEntityId(),
+		WorldID:         strings.TrimSpace(event.GetWorldId()),
+		TargetEntityID:  strings.TrimSpace(event.GetTargetEntityId()),
 		Sequence:        event.GetSequence(),
 		GameTime:        event.GetGameTime(),
 		CanonicalTarget: canonicalTarget,
@@ -241,13 +255,40 @@ func projectCurrentObservation(observation *protocolv1alpha2.Observation) Observ
 	if observation.GetState() != nil {
 		state = copyMap(observation.GetState().AsMap())
 	}
+	extensions := map[string]any(nil)
+	if observation.GetExtensions() != nil {
+		extensions = copyMap(observation.GetExtensions().AsMap())
+	}
 
 	return ObservationProjection{
-		WorldID:  observation.GetWorldId(),
-		EntityID: observation.GetEntityId(),
-		GameTime: observation.GetGameTime(),
-		State:    state,
+		WorldID:        observation.GetWorldId(),
+		EntityID:       observation.GetEntityId(),
+		Revision:       observation.GetRevision(),
+		GameTime:       observation.GetGameTime(),
+		NearbyEntities: copyEntityRefs(observation.GetNearbyEntities()),
+		Extensions:     extensions,
+		State:          state,
 	}
+}
+
+func copyEntityRefs(refs []*protocolv1alpha2.EntityRef) []*protocolv1alpha2.EntityRef {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	out := make([]*protocolv1alpha2.EntityRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		out = append(out, &protocolv1alpha2.EntityRef{
+			EntityId:     strings.TrimSpace(ref.GetEntityId()),
+			EntityType:   strings.TrimSpace(ref.GetEntityType()),
+			DisplayName:  strings.TrimSpace(ref.GetDisplayName()),
+			DefinitionId: strings.TrimSpace(ref.GetDefinitionId()),
+		})
+	}
+	return out
 }
 
 func copyGameDefinition(game *definition.GameDefinition) *definition.GameDefinition {

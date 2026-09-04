@@ -60,6 +60,124 @@ func TestEngineBuildCreatesContextProjectionFromValidatedInput(t *testing.T) {
 	}
 }
 
+func TestEngineBuildProjectsObservationProtocolFields(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
+	input := validEngineInput(t)
+	input.Observation.Revision = 7
+	input.Observation.NearbyEntities = []*protocolv1alpha2.EntityRef{
+		{
+			EntityId:     " player:local ",
+			EntityType:   " player ",
+			DisplayName:  " Local Player ",
+			DefinitionId: " player/local ",
+		},
+		nil,
+		{
+			EntityId:     "npc:Robin",
+			EntityType:   "npc",
+			DisplayName:  "Robin",
+			DefinitionId: "npc/robin",
+		},
+	}
+	input.Observation.Extensions = mustStruct(t, map[string]any{
+		"adapter_revision": "stardew-0.1",
+		"source":           "fixture",
+	})
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	observation := projection.CurrentObservation
+	if observation.Revision != 7 {
+		t.Fatalf("CurrentObservation.Revision = %d, want 7", observation.Revision)
+	}
+	if got, want := len(observation.NearbyEntities), 2; got != want {
+		t.Fatalf("CurrentObservation.NearbyEntities length = %d, want %d", got, want)
+	}
+	first := observation.NearbyEntities[0]
+	if first.GetEntityId() != "player:local" ||
+		first.GetEntityType() != "player" ||
+		first.GetDisplayName() != "Local Player" ||
+		first.GetDefinitionId() != "player/local" {
+		t.Fatalf("first nearby entity = %+v, want trimmed player ref", first)
+	}
+	if got, want := observation.Extensions, map[string]any{"adapter_revision": "stardew-0.1", "source": "fixture"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CurrentObservation.Extensions = %#v, want %#v", got, want)
+	}
+
+	input.Observation.NearbyEntities[0].EntityId = "mutated"
+	if observation.NearbyEntities[0].GetEntityId() != "player:local" {
+		t.Fatalf("CurrentObservation.NearbyEntities shares source refs: %+v", observation.NearbyEntities[0])
+	}
+}
+
+func TestEngineBuildTrimsEventScopeIdentityForValidationAndProjection(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
+	input := validEngineInput(t)
+	input.Event.WorldId = " world-a "
+	input.Event.TargetEntityId = "\tnpc:Abigail\n"
+
+	projection, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if projection.CurrentEvent.WorldID != "world-a" {
+		t.Fatalf("CurrentEvent.WorldID = %q, want trimmed world-a", projection.CurrentEvent.WorldID)
+	}
+	if projection.CurrentEvent.TargetEntityID != "npc:Abigail" {
+		t.Fatalf("CurrentEvent.TargetEntityID = %q, want trimmed npc:Abigail", projection.CurrentEvent.TargetEntityID)
+	}
+}
+
+func TestEngineBuildKeepsEventScopeIdentityCaseSensitive(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*agentcontext.BuildInput)
+		wantErr string
+	}{
+		{
+			name: "world case mismatch",
+			mutate: func(input *agentcontext.BuildInput) {
+				input.Event.WorldId = "World-A"
+			},
+			wantErr: "event world_id does not match session key",
+		},
+		{
+			name: "target case mismatch",
+			mutate: func(input *agentcontext.BuildInput) {
+				input.Event.TargetEntityId = "NPC:Abigail"
+			},
+			wantErr: "event target_entity_id does not match session key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := validEngineInput(t)
+			tt.mutate(&input)
+
+			_, err := agentcontext.NewEngine(agentcontext.EngineConfig{}).Build(input)
+			assertInvalidInputError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestEngineBuildProjectsAuthorityInstruction(t *testing.T) {
+	projection, err := agentcontext.NewEngine(agentcontext.EngineConfig{}).Build(validEngineInput(t))
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	assertStringContainsAll(
+		t,
+		projection.Instruction,
+		"Current Observation is the current truth.",
+		"Recent Memory is historical context.",
+		"Return tool calls only when an environment action is needed.",
+	)
+}
+
 func TestEngineBuildAllowsDefinitionFallback(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{})
 	input := validEngineInput(t)

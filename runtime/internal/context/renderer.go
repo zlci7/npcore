@@ -19,15 +19,13 @@ type RendererConfig struct {
 
 type Renderer struct{}
 
-// NewRenderer 创建 ContextProjection Renderer。
-// Renderer 负责把结构化上下文变成 Provider 可以消费的模型请求。
-// config 保留为构造兼容参数；投影选择和本地上限由 Engine 处理。
+// NewRenderer creates a ContextProjection renderer. Projection selection and
+// local bounds are handled by Engine.
 func NewRenderer(config RendererConfig) Renderer {
 	return Renderer{}
 }
 
-// Render 负责把 ContextProjection 转成 Provider Request。
-// Renderer 在这里固定 Current Observation 优先于 Recent Memory 的上下文语义。
+// Render converts a ContextProjection into a Provider request.
 func (r Renderer) Render(projection ContextProjection) (model.Request, error) {
 	messages := []model.Message{
 		{
@@ -132,12 +130,7 @@ func (r Renderer) renderUserMessage(projection ContextProjection) string {
 %s
 
 [Instruction]
-Current Observation is the current truth.
-Recent Memory is historical context.
-If Recent Memory conflicts with Current Observation, follow Current Observation.
-If Recent Memory is from today and current game time has not clearly advanced much, treat it as nearby conversation context, not proof that the player left and returned.
-
-Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.
+%s
 `,
 		renderRecentMemoryProjection(projection.RecentMemory),
 		renderGameDefinition(projection.GameDefinition),
@@ -146,6 +139,7 @@ Return tool calls only when an environment action is needed. If no action is nee
 		renderCurrentEvent(projection.CurrentEvent),
 		renderCurrentEventContextFacts(projection.CurrentEventContextFacts),
 		renderCurrentObservation(projection.CurrentObservation),
+		projection.Instruction,
 	)
 }
 
@@ -264,8 +258,26 @@ func renderCurrentObservation(observation ObservationProjection) string {
 	fields := make(map[string]any)
 	appendStringField(fields, "world_id", observation.WorldID)
 	appendStringField(fields, "entity_id", observation.EntityID)
+	if observation.Revision != 0 {
+		fields["revision"] = observation.Revision
+	}
 	if observation.GameTime != nil {
 		fields["game_time"] = gameTimeJSON(observation.GameTime)
+	}
+	if len(observation.NearbyEntities) > 0 {
+		nearbyEntities := make([]map[string]any, 0, len(observation.NearbyEntities))
+		for _, entity := range observation.NearbyEntities {
+			if entity == nil {
+				continue
+			}
+			nearbyEntities = append(nearbyEntities, entityRefJSON(entity))
+		}
+		if len(nearbyEntities) > 0 {
+			fields["nearby_entities"] = nearbyEntities
+		}
+	}
+	if len(observation.Extensions) > 0 {
+		fields["extensions"] = observation.Extensions
 	}
 	if len(observation.State) > 0 {
 		fields["state"] = observation.State
