@@ -13,7 +13,22 @@ import (
 	"gameagent/runtime/internal/tool"
 )
 
-var ErrInvalidInput = errors.New("invalid agent context input")
+var (
+	ErrInvalidInput   = errors.New("invalid agent context input")
+	ErrBudgetExceeded = errors.New("context budget exceeded")
+)
+
+const (
+	ReasonDefinitionFallback         = "definition_fallback"
+	ReasonMemoryBudgetExceeded       = "memory_budget_exceeded"
+	ReasonTranscriptBudgetExceeded   = "transcript_budget_exceeded"
+	ReasonEventBudgetExceeded        = "current_event_budget_exceeded"
+	ReasonObservationBudgetExceeded  = "current_observation_budget_exceeded"
+	ReasonContextFactsBudgetExceeded = "context_facts_budget_exceeded"
+	ReasonRequiredContextOverBudget  = "required_context_over_budget"
+	ReasonRequiredSectionOverBudget  = "required_section_over_budget"
+	ReasonDefinitionBudgetExceeded   = "definition_budget_exceeded"
+)
 
 const defaultAuthorityInstruction = `Current Observation is the current truth.
 Recent Memory is historical context.
@@ -22,16 +37,139 @@ If Recent Memory is from today and current game time has not clearly advanced mu
 
 Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.`
 
-type EngineConfig struct {
+type BudgetConfig struct {
 	MemoryContextSizeLimit        int
+	MaxRequestBytes               int
+	MaxSystemBytes                int
+	MaxUserMessageBytes           int
+	MaxDefinitionBytes            int
+	MaxObservationBytes           int
+	MaxEventBytes                 int
+	MaxContextFactsBytes          int
+	MaxRecentMemoryBytes          int
+	MaxTranscriptBytes            int
+	MaxToolCount                  int
+	MaxToolDescriptionBytes       int
+	MaxToolSchemaBytes            int
+	MaxTotalToolSchemaBytes       int
 	MaxToolResultOutputBytes      int
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
 	MaxToolResultOutputArrayItems int
 }
 
+type EngineConfig = BudgetConfig
+
+type BuildResult struct {
+	Projection ContextProjection
+	Report     ContextBuildReport
+}
+
+type ContextBuildReport struct {
+	EffectiveBudget         BudgetConfig
+	Sections                SectionReports
+	GameDefinitionFallback  bool
+	AgentDefinitionFallback bool
+	RecentMemory            RetentionReport
+	Transcript              RetentionReport
+	ToolAdmission           ToolAdmissionSummary
+	FinalRequestSize        RequestSizeSummary
+	ReasonCodes             []string
+}
+
+type SectionReports []SectionReport
+
+type SectionReport struct {
+	Name       string
+	Included   bool
+	ProxyBytes int
+	Cropped    bool
+	Dropped    bool
+	Reason     string
+}
+
+type RetentionReport struct {
+	RetainedCount int
+	DroppedCount  int
+}
+
+type ToolAdmissionSummary struct {
+	AcceptedToolCount int
+	AcceptedToolNames []string
+	DroppedToolCount  int
+	DroppedToolNames  []string
+	DroppedTools      []tool.ToolAdmissionDrop
+	TotalSchemaBytes  int
+}
+
+type RequestSizeSummary struct {
+	SystemBytes      int
+	MessagesBytes    int
+	UserMessageBytes int
+	ToolsBytes       int
+	ControlsBytes    int
+	TotalBytes       int
+}
+
+func (r SectionReports) Has(name string) bool {
+	for _, section := range r {
+		if section.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func DefaultBudgetConfig() BudgetConfig {
+	return BudgetConfig{
+		MaxRequestBytes:               65536,
+		MaxSystemBytes:                8192,
+		MaxUserMessageBytes:           49152,
+		MaxDefinitionBytes:            8192,
+		MaxObservationBytes:           8192,
+		MaxEventBytes:                 4096,
+		MaxContextFactsBytes:          4096,
+		MaxRecentMemoryBytes:          4096,
+		MaxTranscriptBytes:            16384,
+		MaxToolCount:                  64,
+		MaxToolDescriptionBytes:       2048,
+		MaxToolSchemaBytes:            8192,
+		MaxTotalToolSchemaBytes:       32768,
+		MaxToolResultOutputBytes:      8192,
+		MaxToolResultOutputDepth:      4,
+		MaxToolResultOutputFields:     64,
+		MaxToolResultOutputArrayItems: 32,
+	}
+}
+
+func (c BudgetConfig) WithDefaults() BudgetConfig {
+	defaults := DefaultBudgetConfig()
+	if c.MaxRecentMemoryBytes <= 0 && c.MemoryContextSizeLimit > 0 {
+		c.MaxRecentMemoryBytes = c.MemoryContextSizeLimit
+	}
+	c.MemoryContextSizeLimit = 0
+	c.MaxRequestBytes = positiveOrDefault(c.MaxRequestBytes, defaults.MaxRequestBytes)
+	c.MaxSystemBytes = positiveOrDefault(c.MaxSystemBytes, defaults.MaxSystemBytes)
+	c.MaxUserMessageBytes = positiveOrDefault(c.MaxUserMessageBytes, defaults.MaxUserMessageBytes)
+	c.MaxDefinitionBytes = positiveOrDefault(c.MaxDefinitionBytes, defaults.MaxDefinitionBytes)
+	c.MaxObservationBytes = positiveOrDefault(c.MaxObservationBytes, defaults.MaxObservationBytes)
+	c.MaxEventBytes = positiveOrDefault(c.MaxEventBytes, defaults.MaxEventBytes)
+	c.MaxContextFactsBytes = positiveOrDefault(c.MaxContextFactsBytes, defaults.MaxContextFactsBytes)
+	c.MaxRecentMemoryBytes = positiveOrDefault(c.MaxRecentMemoryBytes, defaults.MaxRecentMemoryBytes)
+	c.MaxTranscriptBytes = positiveOrDefault(c.MaxTranscriptBytes, defaults.MaxTranscriptBytes)
+	c.MaxToolCount = positiveOrDefault(c.MaxToolCount, defaults.MaxToolCount)
+	c.MaxToolDescriptionBytes = positiveOrDefault(c.MaxToolDescriptionBytes, defaults.MaxToolDescriptionBytes)
+	c.MaxToolSchemaBytes = positiveOrDefault(c.MaxToolSchemaBytes, defaults.MaxToolSchemaBytes)
+	c.MaxTotalToolSchemaBytes = positiveOrDefault(c.MaxTotalToolSchemaBytes, defaults.MaxTotalToolSchemaBytes)
+	c.MaxToolResultOutputBytes = positiveOrDefault(c.MaxToolResultOutputBytes, defaults.MaxToolResultOutputBytes)
+	c.MaxToolResultOutputDepth = positiveOrDefault(c.MaxToolResultOutputDepth, defaults.MaxToolResultOutputDepth)
+	c.MaxToolResultOutputFields = positiveOrDefault(c.MaxToolResultOutputFields, defaults.MaxToolResultOutputFields)
+	c.MaxToolResultOutputArrayItems = positiveOrDefault(c.MaxToolResultOutputArrayItems, defaults.MaxToolResultOutputArrayItems)
+	return c
+}
+
 type Engine struct {
-	config EngineConfig
+	config BudgetConfig
 }
 
 type ContextProjection struct {
@@ -114,16 +252,35 @@ type BuildInput struct {
 }
 
 func NewEngine(config EngineConfig) Engine {
-	return Engine{config: config}
+	return Engine{config: config.WithDefaults()}
 }
 
-func (e Engine) Build(input BuildInput) (ContextProjection, error) {
+func (e Engine) Build(input BuildInput) (BuildResult, error) {
 	if err := validateEngineInput(input); err != nil {
-		return ContextProjection{}, err
+		return BuildResult{}, err
 	}
 
 	bounds := projectionBoundsFromEngineConfig(e.config)
-	return ContextProjection{
+	recentMemory, recentMemoryReport := projectRecentMemories(
+		input.RecentMemories,
+		e.config.MaxRecentMemoryBytes,
+		currentGameTimeFromEventObservation(input.Event, input.Observation),
+		bounds,
+	)
+	transcript, transcriptReport, err := projectCurrentTurnTranscript(input.Transcript, bounds, e.config.MaxTranscriptBytes)
+	if err != nil {
+		report := ContextBuildReport{
+			EffectiveBudget: e.config,
+			Transcript:      transcriptReport,
+		}
+		if errors.Is(err, ErrBudgetExceeded) {
+			report.addReason(ReasonTranscriptBudgetExceeded)
+			report.addReason(ReasonRequiredContextOverBudget)
+			report.addReason(ReasonRequiredSectionOverBudget)
+		}
+		return BuildResult{Report: report}, err
+	}
+	projection := ContextProjection{
 		SessionKey:               input.SessionKey,
 		CanonicalTarget:          input.CanonicalTarget,
 		AgentDescriptor:          input.AgentDescriptor,
@@ -134,10 +291,386 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error) {
 		CurrentEvent:             projectCurrentEvent(input.Event, input.CanonicalTarget),
 		CurrentEventContextFacts: projectCurrentEventContextFacts(input.Event.GetContextFacts()),
 		CurrentObservation:       projectCurrentObservation(input.Observation),
-		RecentMemory:             projectRecentMemories(input.RecentMemories, e.config.MemoryContextSizeLimit, currentGameTimeFromEventObservation(input.Event, input.Observation), bounds),
+		RecentMemory:             recentMemory,
 		Tools:                    input.TurnToolView.Available(),
-		CurrentTurnTranscript:    projectCurrentTurnTranscript(input.Transcript, bounds),
+		CurrentTurnTranscript:    transcript,
+	}
+	report := newContextBuildReport(projection, input, e.config, recentMemoryReport, transcriptReport)
+	projection, report, err = applyProjectionBudgets(projection, e.config, report)
+	if err != nil {
+		return BuildResult{
+			Projection: projection,
+			Report:     report,
+		}, err
+	}
+	return BuildResult{
+		Projection: projection,
+		Report:     report,
 	}, nil
+}
+
+func newContextBuildReport(projection ContextProjection, input BuildInput, budget BudgetConfig, recentMemory RetentionReport, transcript RetentionReport) ContextBuildReport {
+	report := ContextBuildReport{
+		EffectiveBudget:         budget,
+		Sections:                sectionReportsForProjection(projection),
+		GameDefinitionFallback:  input.GameDefinition == nil,
+		AgentDefinitionFallback: input.CanonicalTarget.GetDefinitionId() != "" && input.AgentDefinition == nil,
+		RecentMemory:            recentMemory,
+		Transcript:              transcript,
+	}
+	if report.GameDefinitionFallback || report.AgentDefinitionFallback {
+		report.addReason(ReasonDefinitionFallback)
+	}
+	if report.RecentMemory.DroppedCount > 0 {
+		report.addReason(ReasonMemoryBudgetExceeded)
+	}
+	if report.Transcript.DroppedCount > 0 {
+		report.addReason(ReasonTranscriptBudgetExceeded)
+	}
+	return report
+}
+
+func sectionReportsForProjection(projection ContextProjection) SectionReports {
+	return SectionReports{
+		{Name: "runtime_policy", Included: projection.RuntimePolicy != "", ProxyBytes: sectionProxyBytes(projection.RuntimePolicy)},
+		{Name: "instruction", Included: projection.Instruction != "", ProxyBytes: sectionProxyBytes(projection.Instruction)},
+		{Name: "agent_descriptor", Included: true, ProxyBytes: sectionProxyBytes(projection.AgentDescriptor)},
+		{Name: "game_definition", Included: projection.GameDefinition != nil, ProxyBytes: sectionProxyBytes(projection.GameDefinition)},
+		{Name: "agent_definition", Included: projection.AgentDefinition != nil, ProxyBytes: sectionProxyBytes(projection.AgentDefinition)},
+		{Name: "current_event", Included: projection.CurrentEvent.EventID != "", ProxyBytes: sectionProxyBytes(projection.CurrentEvent)},
+		{Name: "current_event_context_facts", Included: len(projection.CurrentEventContextFacts) > 0, ProxyBytes: sectionProxyBytes(projection.CurrentEventContextFacts)},
+		{Name: "current_observation", Included: projection.CurrentObservation.EntityID != "", ProxyBytes: sectionProxyBytes(projection.CurrentObservation)},
+		{Name: "recent_memory", Included: len(projection.RecentMemory) > 0, ProxyBytes: sectionProxyBytes(projection.RecentMemory)},
+		{Name: "tools", Included: len(projection.Tools) > 0, ProxyBytes: sectionProxyBytes(projection.Tools)},
+		{Name: "current_turn_transcript", Included: len(projection.CurrentTurnTranscript) > 0, ProxyBytes: sectionProxyBytes(projection.CurrentTurnTranscript)},
+	}
+}
+
+func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, report ContextBuildReport) (ContextProjection, ContextBuildReport, error) {
+	sectionCropped := map[string]string{}
+	var err error
+	projection, definitionCrop, definitionErr := applyDefinitionBudget(projection, budget)
+	if definitionCrop.Agent {
+		report.addReason(ReasonDefinitionBudgetExceeded)
+		sectionCropped["agent_definition"] = ReasonDefinitionBudgetExceeded
+	}
+	if definitionCrop.Game {
+		report.addReason(ReasonDefinitionBudgetExceeded)
+		sectionCropped["game_definition"] = ReasonDefinitionBudgetExceeded
+	}
+	if definitionErr != nil {
+		report.addReason(ReasonDefinitionBudgetExceeded)
+		report.addReason(ReasonRequiredContextOverBudget)
+		report.addReason(ReasonRequiredSectionOverBudget)
+		err = definitionErr
+	}
+	if budget.MaxEventBytes > 0 && sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
+		projection.CurrentEvent.Payload = truncationMap("current event payload exceeded byte limit")
+		report.addReason(ReasonEventBudgetExceeded)
+		sectionCropped["current_event"] = ReasonEventBudgetExceeded
+	}
+	if budget.MaxObservationBytes > 0 && sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+		projection.CurrentObservation.NearbyEntities = nil
+		projection.CurrentObservation.Extensions = nil
+		if len(projection.CurrentObservation.State) > 0 {
+			projection.CurrentObservation.State = truncationMap("current observation state exceeded byte limit")
+		}
+		report.addReason(ReasonObservationBudgetExceeded)
+		sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
+	}
+	if budget.MaxContextFactsBytes > 0 && sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+		for i := range projection.CurrentEventContextFacts {
+			if projection.CurrentEventContextFacts[i].Text != "" {
+				projection.CurrentEventContextFacts[i].Text = "_truncated: context fact text exceeded byte limit"
+			}
+			projection.CurrentEventContextFacts[i].Attributes = nil
+		}
+		report.addReason(ReasonContextFactsBudgetExceeded)
+		sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
+	}
+	report.Sections = markCroppedSections(sectionReportsForProjection(projection), sectionCropped)
+	return projection, report, err
+}
+
+type definitionBudgetCrop struct {
+	Agent bool
+	Game  bool
+}
+
+func applyDefinitionBudget(projection ContextProjection, budget BudgetConfig) (ContextProjection, definitionBudgetCrop, error) {
+	if budget.MaxDefinitionBytes <= 0 || (projection.AgentDefinition == nil && projection.GameDefinition == nil) {
+		return projection, definitionBudgetCrop{}, nil
+	}
+
+	sourceAgent := projection.AgentDefinition
+	sourceGame := projection.GameDefinition
+	agent := minimalAgentDefinition(sourceAgent)
+	game := minimalGameDefinition(sourceGame)
+	crop := definitionBudgetCrop{}
+
+	projection.AgentDefinition = agent
+	projection.GameDefinition = game
+	if definitionBudgetBytes(agent, game) > budget.MaxDefinitionBytes {
+		crop.Agent = sourceAgent != nil && !agentDefinitionsEqual(sourceAgent, agent)
+		crop.Game = sourceGame != nil && !gameDefinitionsEqual(sourceGame, game)
+		return projection, crop, fmt.Errorf("%w: definition required minimum exceeds byte budget", ErrBudgetExceeded)
+	}
+
+	if sourceAgent != nil {
+		fillAgentDefinitionWithinBudget(&agent, game, sourceAgent, budget.MaxDefinitionBytes)
+	}
+	if sourceGame != nil {
+		fillGameDefinitionWithinBudget(agent, &game, sourceGame, budget.MaxDefinitionBytes)
+	}
+	projection.AgentDefinition = agent
+	projection.GameDefinition = game
+	crop.Agent = sourceAgent != nil && !agentDefinitionsEqual(sourceAgent, agent)
+	crop.Game = sourceGame != nil && !gameDefinitionsEqual(sourceGame, game)
+	return projection, crop, nil
+}
+
+func minimalAgentDefinition(agent *definition.AgentDefinition) *definition.AgentDefinition {
+	if agent == nil {
+		return nil
+	}
+	return &definition.AgentDefinition{
+		SchemaVersion: agent.SchemaVersion,
+		GameID:        agent.GameID,
+		DefinitionID:  agent.DefinitionID,
+	}
+}
+
+func minimalGameDefinition(game *definition.GameDefinition) *definition.GameDefinition {
+	if game == nil {
+		return nil
+	}
+	return &definition.GameDefinition{
+		SchemaVersion: game.SchemaVersion,
+		GameID:        game.GameID,
+	}
+}
+
+func fillAgentDefinitionWithinBudget(agent **definition.AgentDefinition, game *definition.GameDefinition, source *definition.AgentDefinition, limit int) bool {
+	if source.Identity != "" {
+		if !tryUpdateAgentDefinition(agent, game, limit, func(candidate *definition.AgentDefinition) {
+			candidate.Identity = source.Identity
+		}) {
+			return true
+		}
+	}
+	if appendAgentDefinitionItems(agent, game, limit, source.Personality, func(candidate *definition.AgentDefinition, item string) {
+		candidate.Personality = append(candidate.Personality, item)
+	}) {
+		return true
+	}
+	if appendAgentDefinitionItems(agent, game, limit, source.SpeechStyle, func(candidate *definition.AgentDefinition, item string) {
+		candidate.SpeechStyle = append(candidate.SpeechStyle, item)
+	}) {
+		return true
+	}
+	if appendAgentDefinitionItems(agent, game, limit, source.Preferences, func(candidate *definition.AgentDefinition, item string) {
+		candidate.Preferences = append(candidate.Preferences, item)
+	}) {
+		return true
+	}
+	if appendAgentDefinitionItems(agent, game, limit, source.BehaviorGuidelines, func(candidate *definition.AgentDefinition, item string) {
+		candidate.BehaviorGuidelines = append(candidate.BehaviorGuidelines, item)
+	}) {
+		return true
+	}
+	if source.SourceVersion != "" {
+		if !tryUpdateAgentDefinition(agent, game, limit, func(candidate *definition.AgentDefinition) {
+			candidate.SourceVersion = source.SourceVersion
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func fillGameDefinitionWithinBudget(agent *definition.AgentDefinition, game **definition.GameDefinition, source *definition.GameDefinition, limit int) bool {
+	if source.Title != "" {
+		if !tryUpdateGameDefinition(agent, game, limit, func(candidate *definition.GameDefinition) {
+			candidate.Title = source.Title
+		}) {
+			return true
+		}
+	}
+	if source.Summary != "" {
+		if !tryUpdateGameDefinition(agent, game, limit, func(candidate *definition.GameDefinition) {
+			candidate.Summary = source.Summary
+		}) {
+			return true
+		}
+	}
+	if appendGameDefinitionItems(agent, game, limit, source.WorldRules, func(candidate *definition.GameDefinition, item string) {
+		candidate.WorldRules = append(candidate.WorldRules, item)
+	}) {
+		return true
+	}
+	if appendGameDefinitionItems(agent, game, limit, source.Lore, func(candidate *definition.GameDefinition, item string) {
+		candidate.Lore = append(candidate.Lore, item)
+	}) {
+		return true
+	}
+	if appendGameDefinitionItems(agent, game, limit, source.NarrativeConstraints, func(candidate *definition.GameDefinition, item string) {
+		candidate.NarrativeConstraints = append(candidate.NarrativeConstraints, item)
+	}) {
+		return true
+	}
+	if source.SourceVersion != "" {
+		if !tryUpdateGameDefinition(agent, game, limit, func(candidate *definition.GameDefinition) {
+			candidate.SourceVersion = source.SourceVersion
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendAgentDefinitionItems(
+	agent **definition.AgentDefinition,
+	game *definition.GameDefinition,
+	limit int,
+	items []string,
+	appendItem func(*definition.AgentDefinition, string),
+) bool {
+	for index, item := range items {
+		if !tryUpdateAgentDefinition(agent, game, limit, func(candidate *definition.AgentDefinition) {
+			appendItem(candidate, item)
+		}) {
+			return index < len(items)
+		}
+	}
+	return false
+}
+
+func appendGameDefinitionItems(
+	agent *definition.AgentDefinition,
+	game **definition.GameDefinition,
+	limit int,
+	items []string,
+	appendItem func(*definition.GameDefinition, string),
+) bool {
+	for index, item := range items {
+		if !tryUpdateGameDefinition(agent, game, limit, func(candidate *definition.GameDefinition) {
+			appendItem(candidate, item)
+		}) {
+			return index < len(items)
+		}
+	}
+	return false
+}
+
+func tryUpdateAgentDefinition(agent **definition.AgentDefinition, game *definition.GameDefinition, limit int, update func(*definition.AgentDefinition)) bool {
+	if *agent == nil {
+		return false
+	}
+	candidate := copyAgentDefinition(*agent)
+	update(candidate)
+	if definitionBudgetBytes(candidate, game) > limit {
+		return false
+	}
+	*agent = candidate
+	return true
+}
+
+func tryUpdateGameDefinition(agent *definition.AgentDefinition, game **definition.GameDefinition, limit int, update func(*definition.GameDefinition)) bool {
+	if *game == nil {
+		return false
+	}
+	candidate := copyGameDefinition(*game)
+	update(candidate)
+	if definitionBudgetBytes(agent, candidate) > limit {
+		return false
+	}
+	*game = candidate
+	return true
+}
+
+func definitionBudgetBytes(agent *definition.AgentDefinition, game *definition.GameDefinition) int {
+	total := 0
+	if agent != nil {
+		total += sectionProxyBytes(agent)
+	}
+	if game != nil {
+		total += sectionProxyBytes(game)
+	}
+	return total
+}
+
+func agentDefinitionsEqual(left, right *definition.AgentDefinition) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.SchemaVersion == right.SchemaVersion &&
+		left.GameID == right.GameID &&
+		left.DefinitionID == right.DefinitionID &&
+		left.Identity == right.Identity &&
+		stringSlicesEqual(left.Personality, right.Personality) &&
+		stringSlicesEqual(left.SpeechStyle, right.SpeechStyle) &&
+		stringSlicesEqual(left.Preferences, right.Preferences) &&
+		stringSlicesEqual(left.BehaviorGuidelines, right.BehaviorGuidelines) &&
+		left.SourceVersion == right.SourceVersion
+}
+
+func gameDefinitionsEqual(left, right *definition.GameDefinition) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.SchemaVersion == right.SchemaVersion &&
+		left.GameID == right.GameID &&
+		left.Title == right.Title &&
+		left.Summary == right.Summary &&
+		stringSlicesEqual(left.WorldRules, right.WorldRules) &&
+		stringSlicesEqual(left.Lore, right.Lore) &&
+		stringSlicesEqual(left.NarrativeConstraints, right.NarrativeConstraints) &&
+		left.SourceVersion == right.SourceVersion
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func markCroppedSections(sections SectionReports, cropped map[string]string) SectionReports {
+	if len(cropped) == 0 {
+		return sections
+	}
+	for i := range sections {
+		if reason, ok := cropped[sections[i].Name]; ok {
+			sections[i].Cropped = true
+			sections[i].Reason = reason
+		}
+	}
+	return sections
+}
+
+func truncationMap(message string) map[string]any {
+	return map[string]any{"_truncated": message}
+}
+
+func sectionProxyBytes(value any) int {
+	return len([]byte(stableCompactJSON(value)))
+}
+
+func (r *ContextBuildReport) addReason(reason string) {
+	if reason == "" {
+		return
+	}
+	for _, existing := range r.ReasonCodes {
+		if existing == reason {
+			return
+		}
+	}
+	r.ReasonCodes = append(r.ReasonCodes, reason)
 }
 
 func validateEngineInput(input BuildInput) error {

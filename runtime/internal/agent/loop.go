@@ -116,18 +116,25 @@ func NewLoop(modelProvider model.Provider, recorder trace.Recorder, config Confi
 		memoryProjector: memory.NewProjector(nil),
 		contextEngine: agentcontext.NewEngine(agentcontext.EngineConfig{
 			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
+			MaxRequestBytes:               config.MaxRequestBytes,
+			MaxSystemBytes:                config.MaxSystemBytes,
+			MaxUserMessageBytes:           config.MaxUserMessageBytes,
+			MaxDefinitionBytes:            config.MaxDefinitionBytes,
+			MaxObservationBytes:           config.MaxObservationBytes,
+			MaxEventBytes:                 config.MaxEventBytes,
+			MaxContextFactsBytes:          config.MaxContextFactsBytes,
+			MaxRecentMemoryBytes:          config.MaxRecentMemoryBytes,
+			MaxTranscriptBytes:            config.MaxTranscriptBytes,
+			MaxToolCount:                  config.MaxToolCount,
+			MaxToolDescriptionBytes:       config.MaxToolDescriptionBytes,
+			MaxToolSchemaBytes:            config.MaxToolSchemaBytes,
+			MaxTotalToolSchemaBytes:       config.MaxTotalToolSchemaBytes,
 			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
 			MaxToolResultOutputDepth:      config.MaxToolResultOutputDepth,
 			MaxToolResultOutputFields:     config.MaxToolResultOutputFields,
 			MaxToolResultOutputArrayItems: config.MaxToolResultOutputArrayItems,
 		}),
-		contextRenderer: agentcontext.NewRenderer(agentcontext.RendererConfig{
-			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
-			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
-			MaxToolResultOutputDepth:      config.MaxToolResultOutputDepth,
-			MaxToolResultOutputFields:     config.MaxToolResultOutputFields,
-			MaxToolResultOutputArrayItems: config.MaxToolResultOutputArrayItems,
-		}),
+		contextRenderer: agentcontext.NewRenderer(),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -177,7 +184,8 @@ func (l *Loop) HandleEvent(
 	if catalog == nil {
 		return fmt.Errorf("environment tool catalog is required")
 	}
-	toolView := catalog.Snapshot()
+	toolAdmission := catalog.BuildTurnToolView(l.toolAdmissionConfig())
+	toolView := toolAdmission.View
 	tools := toolView.Available()
 	ctx, cancelTurn := context.WithTimeout(ctx, l.config.TurnTimeout)
 	defer cancelTurn()
@@ -194,8 +202,11 @@ func (l *Loop) HandleEvent(
 	}, turnID)
 	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{
 		Fields: trace.Fields{
-			"turn_tool_count": len(tools),
-			"turn_tool_names": toolDefinitionNames(tools),
+			"turn_tool_count":         len(tools),
+			"turn_tool_names":         toolDefinitionNames(tools),
+			"dropped_tool_count":      toolAdmission.Report.DroppedToolCount,
+			"dropped_tool_names":      append([]string(nil), toolAdmission.Report.DroppedToolNames...),
+			"tool_schema_total_bytes": toolAdmission.Report.TotalSchemaBytes,
 		},
 	})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
@@ -213,7 +224,7 @@ func (l *Loop) HandleEvent(
 
 	descriptor := definition.NewAgentInstanceDescriptor(key, target)
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
-	return l.runBoundedSteps(ctx, env, key, target, descriptor, event, obs, recentMemories, toolView, turnID, turnTracer)
+	return l.runBoundedSteps(ctx, env, key, target, descriptor, event, obs, recentMemories, toolView, toolAdmission.Report, turnID, turnTracer)
 }
 
 func (l *Loop) runBoundedSteps(
@@ -226,6 +237,7 @@ func (l *Loop) runBoundedSteps(
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
 	toolView tool.TurnToolView,
+	toolAdmissionReport tool.ToolAdmissionReport,
 	turnID string,
 	turnTracer trace.TurnTracer,
 ) error {
@@ -240,8 +252,11 @@ func (l *Loop) runBoundedSteps(
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
 
-		req, err := l.buildModelRequest(key, target, descriptor, event, obs, recentMemories, toolView, transcript)
+		req, buildReport, err := l.buildModelRequest(key, target, descriptor, event, obs, recentMemories, toolView, toolAdmissionReport, transcript)
 		if err != nil {
+			turnTracer.Emit(trace.EventContextRequestBuildFailed, trace.EventData{
+				Fields: contextBuildTraceFields(stepIndex, buildReport),
+			})
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": contextFailureReason(err)},
 			})
@@ -251,13 +266,17 @@ func (l *Loop) runBoundedSteps(
 			return err
 		}
 
+		turnTracer.Emit(trace.EventContextRequestBuilt, trace.EventData{
+			Fields: contextBuildTraceFields(stepIndex, buildReport),
+		})
 		turnTracer.Emit(trace.EventModelRequestStarted, trace.EventData{
 			Fields: trace.Fields{
-				"tool_count":  len(req.Tools),
-				"step_index":  stepIndex,
-				"transcript":  len(transcript),
-				"max_steps":   l.config.MaxSteps,
-				"turn_budget": l.config.MaxToolCallsPerTurn,
+				"tool_count":          len(req.Tools),
+				"step_index":          stepIndex,
+				"transcript":          len(transcript),
+				"max_steps":           l.config.MaxSteps,
+				"turn_budget":         l.config.MaxToolCallsPerTurn,
+				"request_total_bytes": buildReport.FinalRequestSize.TotalBytes,
 			},
 		})
 		modelCtx, cancelLLM := context.WithTimeout(ctx, l.config.LLMTimeout)
@@ -570,10 +589,12 @@ func (l *Loop) buildModelRequest(
 	obs *protocolv1alpha2.Observation,
 	recentMemories []memory.Record,
 	toolView tool.TurnToolView,
+	toolAdmissionReport tool.ToolAdmissionReport,
 	transcript []model.Message,
-) (model.Request, error) {
+) (model.Request, agentcontext.ContextBuildReport, error) {
 	gameDefinition, agentDefinition := l.resolveDefinitions(key, descriptor)
-	projection, err := l.contextEngine.Build(agentcontext.BuildInput{
+	toolAdmissionSummary := agentcontext.ToolAdmissionSummaryFromReport(toolAdmissionReport)
+	buildResult, err := l.contextEngine.Build(agentcontext.BuildInput{
 		SessionKey:      key,
 		CanonicalTarget: target,
 		AgentDescriptor: descriptor,
@@ -587,14 +608,24 @@ func (l *Loop) buildModelRequest(
 		Transcript:      transcript,
 	})
 	if err != nil {
-		return model.Request{}, err
+		return model.Request{}, buildResult.Report.WithToolAdmission(toolAdmissionSummary), err
 	}
+	report := buildResult.Report.WithToolAdmission(toolAdmissionSummary)
 
-	req, err := l.contextRenderer.Render(projection)
+	req, err := l.contextRenderer.Render(buildResult.Projection)
 	if err != nil {
-		return model.Request{}, err
+		return model.Request{}, report, err
 	}
-	return req, nil
+	size := agentcontext.MeasureRequest(req)
+	report = report.WithFinalRequestSize(size)
+	if agentcontext.RequestSizeExceedsBudget(size, report.EffectiveBudget) {
+		report = report.WithReason(agentcontext.ReasonRequiredContextOverBudget)
+		if agentcontext.RequiredRequestSectionExceedsBudget(size, report.EffectiveBudget) {
+			report = report.WithReason(agentcontext.ReasonRequiredSectionOverBudget)
+		}
+		return model.Request{}, report, agentcontext.RequestSizeBudgetError(size, report.EffectiveBudget)
+	}
+	return req, report, nil
 }
 
 func (l *Loop) resolveDefinitions(key session.AgentSessionKey, descriptor definition.AgentInstanceDescriptor) (*definition.GameDefinition, *definition.AgentDefinition) {
@@ -762,7 +793,42 @@ func validateControlDirective(control model.ControlDirective) error {
 	}
 }
 
+func (l *Loop) toolAdmissionConfig() tool.ToolAdmissionConfig {
+	return tool.ToolAdmissionConfig{
+		MaxToolCount:            l.config.MaxToolCount,
+		MaxToolDescriptionBytes: l.config.MaxToolDescriptionBytes,
+		MaxToolSchemaBytes:      l.config.MaxToolSchemaBytes,
+		MaxTotalToolSchemaBytes: l.config.MaxTotalToolSchemaBytes,
+	}
+}
+
+func contextBuildTraceFields(stepIndex int, report agentcontext.ContextBuildReport) trace.Fields {
+	fields := trace.Fields{
+		"step_index":                 stepIndex,
+		"reason_codes":               append([]string(nil), report.ReasonCodes...),
+		"recent_memory_retained":     report.RecentMemory.RetainedCount,
+		"recent_memory_dropped":      report.RecentMemory.DroppedCount,
+		"transcript_retained":        report.Transcript.RetainedCount,
+		"transcript_dropped":         report.Transcript.DroppedCount,
+		"accepted_tool_count":        report.ToolAdmission.AcceptedToolCount,
+		"accepted_tool_names":        append([]string(nil), report.ToolAdmission.AcceptedToolNames...),
+		"dropped_tool_count":         report.ToolAdmission.DroppedToolCount,
+		"dropped_tool_names":         append([]string(nil), report.ToolAdmission.DroppedToolNames...),
+		"tool_schema_total_bytes":    report.ToolAdmission.TotalSchemaBytes,
+		"request_total_bytes":        report.FinalRequestSize.TotalBytes,
+		"request_system_bytes":       report.FinalRequestSize.SystemBytes,
+		"request_messages_bytes":     report.FinalRequestSize.MessagesBytes,
+		"request_user_message_bytes": report.FinalRequestSize.UserMessageBytes,
+		"request_tools_bytes":        report.FinalRequestSize.ToolsBytes,
+		"request_controls_bytes":     report.FinalRequestSize.ControlsBytes,
+	}
+	return fields
+}
+
 func contextFailureReason(err error) string {
+	if errors.Is(err, agentcontext.ErrBudgetExceeded) {
+		return agentcontext.ReasonRequiredContextOverBudget
+	}
 	if errors.Is(err, agentcontext.ErrInvalidInput) {
 		return "context_build_failed"
 	}

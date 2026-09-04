@@ -16,6 +16,8 @@ const (
 	EventObservationReceived        EventName = "observation_received"
 	EventContextLoaded              EventName = "context_loaded"
 	EventContextLoadFailed          EventName = "context_load_failed"
+	EventContextRequestBuilt        EventName = "context_request_built"
+	EventContextRequestBuildFailed  EventName = "context_request_build_failed"
 	EventModelRequestStarted        EventName = "model_request_started"
 	EventModelResponseReceived      EventName = "model_response_received"
 	EventToolCallSelected           EventName = "tool_call_selected"

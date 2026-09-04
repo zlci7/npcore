@@ -1,14 +1,15 @@
 package context
 
 import (
+	"fmt"
 	"strings"
 
 	"gameagent/runtime/internal/model"
 )
 
-func projectCurrentTurnTranscript(messages []model.Message, bounds projectionBounds) []model.Message {
+func projectCurrentTurnTranscript(messages []model.Message, bounds projectionBounds, limit int) ([]model.Message, RetentionReport, error) {
 	if len(messages) == 0 {
-		return nil
+		return nil, RetentionReport{}, nil
 	}
 
 	out := make([]model.Message, len(messages))
@@ -19,6 +20,112 @@ func projectCurrentTurnTranscript(messages []model.Message, bounds projectionBou
 			ToolCalls:   projectTranscriptToolCalls(message.ToolCalls, bounds),
 			ToolResults: projectTranscriptToolResults(message.ToolResults, bounds),
 		}
+	}
+	groups, err := transcriptCausalGroups(out)
+	if err != nil {
+		return nil, RetentionReport{}, err
+	}
+	trimmed, dropped, err := trimTranscriptGroups(groups, limit)
+	if err != nil {
+		return nil, RetentionReport{
+			DroppedCount: len(out),
+		}, err
+	}
+	return trimmed, RetentionReport{
+		RetainedCount: len(trimmed),
+		DroppedCount:  dropped,
+	}, nil
+}
+
+type transcriptCausalGroup struct {
+	messages []model.Message
+}
+
+func transcriptCausalGroups(messages []model.Message) ([]transcriptCausalGroup, error) {
+	groups := make([]transcriptCausalGroup, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		message := messages[i]
+		if len(message.ToolCalls) == 0 {
+			if len(message.ToolResults) > 0 {
+				return nil, fmt.Errorf("%w: transcript tool result has no corresponding call", ErrInvalidInput)
+			}
+			groups = append(groups, transcriptCausalGroup{messages: []model.Message{message}})
+			continue
+		}
+
+		if i+1 >= len(messages) {
+			return nil, fmt.Errorf("%w: transcript tool call has no corresponding result", ErrInvalidInput)
+		}
+		resultMessage := messages[i+1]
+		if len(resultMessage.ToolResults) == 0 || len(resultMessage.ToolCalls) > 0 {
+			return nil, fmt.Errorf("%w: transcript tool call has no corresponding result", ErrInvalidInput)
+		}
+		if !toolResultsMatchCalls(message.ToolCalls, resultMessage.ToolResults) {
+			return nil, fmt.Errorf("%w: transcript tool call has no corresponding result", ErrInvalidInput)
+		}
+		groups = append(groups, transcriptCausalGroup{messages: []model.Message{message, resultMessage}})
+		i++
+	}
+	return groups, nil
+}
+
+func toolResultsMatchCalls(calls []model.ToolCall, results []model.ToolResult) bool {
+	if len(calls) == 0 || len(calls) != len(results) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if strings.TrimSpace(call.ID) == "" {
+			return false
+		}
+		seen[call.ID] = struct{}{}
+	}
+	for _, result := range results {
+		if _, ok := seen[result.ToolCallID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func trimTranscriptGroups(groups []transcriptCausalGroup, limit int) ([]model.Message, int, error) {
+	if len(groups) == 0 {
+		return nil, 0, nil
+	}
+	if limit <= 0 {
+		return flattenTranscriptGroups(groups), 0, nil
+	}
+
+	selectedStart := len(groups)
+	totalBytes := 0
+	for i := len(groups) - 1; i >= 0; i-- {
+		groupBytes := sectionProxyBytes(groups[i].messages)
+		if totalBytes+groupBytes > limit {
+			if selectedStart == len(groups) {
+				return nil, len(flattenTranscriptGroups(groups)), fmt.Errorf("%w: latest transcript causal group exceeds byte budget", ErrBudgetExceeded)
+			}
+			break
+		}
+		selectedStart = i
+		totalBytes += groupBytes
+	}
+
+	kept := flattenTranscriptGroups(groups[selectedStart:])
+	dropped := len(flattenTranscriptGroups(groups[:selectedStart]))
+	return kept, dropped, nil
+}
+
+func flattenTranscriptGroups(groups []transcriptCausalGroup) []model.Message {
+	count := 0
+	for _, group := range groups {
+		count += len(group.messages)
+	}
+	if count == 0 {
+		return nil
+	}
+	out := make([]model.Message, 0, count)
+	for _, group := range groups {
+		out = append(out, group.messages...)
 	}
 	return out
 }

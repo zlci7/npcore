@@ -9,9 +9,9 @@ import (
 	"gameagent/runtime/internal/memory"
 )
 
-func projectRecentMemories(records []memory.Record, limit int, currentTime *memory.GameTimeSnapshot, bounds projectionBounds) []MemoryProjection {
+func projectRecentMemories(records []memory.Record, limit int, currentTime *memory.GameTimeSnapshot, bounds projectionBounds) ([]MemoryProjection, RetentionReport) {
 	if len(records) == 0 {
-		return nil
+		return nil, RetentionReport{}
 	}
 
 	selected := selectTimelineMemories(records, currentTime)
@@ -19,7 +19,11 @@ func projectRecentMemories(records []memory.Record, limit int, currentTime *memo
 	for _, record := range selected {
 		projections = append(projections, projectRecentMemory(record, currentTime, bounds))
 	}
-	return trimMemoryProjections(projections, limit)
+	trimmed := trimMemoryProjections(projections, limit)
+	return trimmed, RetentionReport{
+		RetainedCount: len(trimmed),
+		DroppedCount:  len(projections) - len(trimmed),
+	}
 }
 
 func projectRecentMemory(record memory.Record, currentTime *memory.GameTimeSnapshot, bounds projectionBounds) MemoryProjection {

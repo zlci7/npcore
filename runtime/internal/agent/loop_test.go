@@ -12,6 +12,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
+	agentcontext "gameagent/runtime/internal/context"
 	"gameagent/runtime/internal/definition"
 	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/memory"
@@ -542,6 +543,103 @@ func TestHandleEventUsesTurnToolViewForModelRequestAndScheduler(t *testing.T) {
 	}
 }
 
+func TestHandleEventAppliesToolAdmissionToModelRequestAndScheduler(t *testing.T) {
+	catalog := mustEnvironmentToolCatalog(t, []*protocolv1alpha2.Capability{
+		{
+			Name:            "alpha",
+			Description:     "First admitted tool.",
+			InputSchemaJson: `{"type":"object"}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+		{
+			Name:            "zeta",
+			Description:     "Dropped after the count limit.",
+			InputSchemaJson: `{"type":"object"}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+	})
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{
+						ID:        "call_1",
+						Name:      "zeta",
+						Arguments: map[string]any{},
+					}},
+					Control: model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	config := agent.DefaultConfig()
+	config.MaxToolCount = 1
+	config.MaxSteps = 2
+	loop := agent.NewLoop(provider, recorder, config)
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want retry after dropped tool failure", got)
+	}
+	for index, req := range provider.requests {
+		if got, want := len(req.Tools), 1; got != want {
+			t.Fatalf("request %d tool count = %d, want %d", index, got, want)
+		}
+		if got, want := req.Tools[0].Name, "alpha"; got != want {
+			t.Fatalf("request %d tool = %q, want %q", index, got, want)
+		}
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "tool_not_registered") {
+		t.Fatalf("second request missing tool_not_registered result: %+v", provider.requests[1].Messages)
+	}
+	assertTraceContains(t, recorder.events, trace.EventContextRequestBuilt)
+}
+
+func TestHandleEventFailsBeforeProviderWhenRequestHardLimitExceeded(t *testing.T) {
+	catalog := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{}
+	config := agent.DefaultConfig()
+	config.MaxSystemBytes = 1
+	loop := agent.NewLoop(provider, recorder, config)
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key))
+	if !errors.Is(err, agentcontext.ErrBudgetExceeded) {
+		t.Fatalf("HandleEvent error = %v, want ErrBudgetExceeded", err)
+	}
+	if got := len(provider.requests); got != 0 {
+		t.Fatalf("provider request count = %d, want 0", got)
+	}
+	if got := len(env.submittedActions); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.GetError().GetCode() != agentcontext.ReasonRequiredContextOverBudget {
+		t.Fatalf("completion error code = %q, want %q", completion.GetError().GetCode(), agentcontext.ReasonRequiredContextOverBudget)
+	}
+	assertTraceContains(t, recorder.events, trace.EventContextRequestBuildFailed)
+	assertContextBuildFailedReasons(t, recorder.events, []string{
+		agentcontext.ReasonRequiredContextOverBudget,
+		agentcontext.ReasonRequiredSectionOverBudget,
+	})
+	assertTraceNotContains(t, recorder.events, trace.EventModelRequestStarted)
+}
+
 func TestHandleEventKeepsSeparateInstanceScopeForSharedDefinition(t *testing.T) {
 	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}
@@ -937,6 +1035,36 @@ func assertTraceNotContains(t *testing.T, events []trace.Event, unwanted trace.E
 			t.Fatalf("trace unexpectedly contains event %q; got %+v", unwanted, events)
 		}
 	}
+}
+
+func assertContextBuildFailedReasons(t *testing.T, events []trace.Event, want []string) {
+	t.Helper()
+
+	for _, event := range events {
+		if event.Event != trace.EventContextRequestBuildFailed {
+			continue
+		}
+		got, ok := event.Fields["reason_codes"].([]string)
+		if !ok {
+			t.Fatalf("reason_codes = %#v, want []string", event.Fields["reason_codes"])
+		}
+		for _, reason := range want {
+			if !stringSliceContains(got, reason) {
+				t.Fatalf("reason_codes = %v, want %q", got, reason)
+			}
+		}
+		return
+	}
+	t.Fatalf("trace missing event %q; got %+v", trace.EventContextRequestBuildFailed, events)
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertTraceContainsInOrder(t *testing.T, events []trace.Event, want []trace.EventName) {

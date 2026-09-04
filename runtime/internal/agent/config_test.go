@@ -310,6 +310,57 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	data := []byte(`{
+  "max_request_bytes": 10000,
+  "max_system_bytes": 1000,
+  "max_user_message_bytes": 8000,
+  "max_definition_bytes": 1200,
+  "max_observation_bytes": 2200,
+  "max_event_bytes": 900,
+  "max_context_facts_bytes": 700,
+  "max_recent_memory_bytes": 333,
+  "max_transcript_bytes": 444,
+  "max_tool_count": 5,
+  "max_tool_description_bytes": 88,
+  "max_tool_schema_bytes": 99,
+  "max_total_tool_schema_bytes": 222
+}`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := agent.LoadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.MaxRequestBytes != 10000 ||
+		cfg.MaxSystemBytes != 1000 ||
+		cfg.MaxUserMessageBytes != 8000 ||
+		cfg.MaxDefinitionBytes != 1200 ||
+		cfg.MaxObservationBytes != 2200 ||
+		cfg.MaxEventBytes != 900 ||
+		cfg.MaxContextFactsBytes != 700 ||
+		cfg.MaxRecentMemoryBytes != 333 ||
+		cfg.MaxTranscriptBytes != 444 ||
+		cfg.MaxToolCount != 5 ||
+		cfg.MaxToolDescriptionBytes != 88 ||
+		cfg.MaxToolSchemaBytes != 99 ||
+		cfg.MaxTotalToolSchemaBytes != 222 {
+		t.Fatalf("phase7.4 budget config not loaded: %+v", cfg)
+	}
+}
+
+func TestConfigMapsLegacyMemoryContextLimitToRecentMemoryBudget(t *testing.T) {
+	cfg := (agent.Config{MemoryContextSizeLimit: 777}).WithDefaults()
+
+	if cfg.MaxRecentMemoryBytes != 777 {
+		t.Fatalf("MaxRecentMemoryBytes = %d, want legacy MemoryContextSizeLimit mapping to 777", cfg.MaxRecentMemoryBytes)
+	}
+}
+
 func TestConfigPhase6DefaultTurnTimeoutCoversAsyncBudget(t *testing.T) {
 	cfg := agent.DefaultConfig()
 	worstCase := cfg.ObserveTimeout +

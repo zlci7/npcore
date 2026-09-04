@@ -78,7 +78,7 @@ func TestEngineDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
 }
 
 func TestEngineUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 	descriptor := definition.AgentInstanceDescriptor{
 		SessionKey:   session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
 		EntityType:   "creature",
@@ -150,7 +150,7 @@ func TestEngineUsesInjectedDefinitionsAndDescriptor(t *testing.T) {
 }
 
 func TestRendererOmitsFabricatedDefinitionsWhenFallbackIsUsed(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
@@ -187,9 +187,7 @@ func TestRendererOmitsFabricatedDefinitionsWhenFallbackIsUsed(t *testing.T) {
 }
 
 func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 	speakTool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
@@ -287,7 +285,7 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 }
 
 func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -358,7 +356,7 @@ func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *test
 }
 
 func TestRendererConsumesContextProjectionOnly(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	renderer := agentcontext.NewRenderer()
 	tool := model.ToolDefinition{Name: "speak", Description: "say text", InputSchema: `{"type":"object"}`}
 	projection := agentcontext.ContextProjection{
 		RuntimePolicy: "policy",
@@ -446,7 +444,7 @@ func TestRendererConsumesContextProjectionOnly(t *testing.T) {
 }
 
 func TestRendererDoesNotInventInstructionWhenProjectionInstructionIsEmpty(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	renderer := agentcontext.NewRenderer()
 	projection := agentcontext.ContextProjection{
 		RuntimePolicy: "policy",
 		CurrentEvent: agentcontext.EventProjection{
@@ -475,13 +473,7 @@ func TestRendererDoesNotInventInstructionWhenProjectionInstructionIsEmpty(t *tes
 }
 
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit:        1024,
-		MaxToolResultOutputBytes:      4096,
-		MaxToolResultOutputDepth:      4,
-		MaxToolResultOutputFields:     16,
-		MaxToolResultOutputArrayItems: 8,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -534,7 +526,7 @@ func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
 }
 
 func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -544,16 +536,26 @@ func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
 		RecentMemories: []memory.Record{{
 			Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": "previous turn line"}}},
 		}},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "speak",
-				Status:     "succeeded",
-				Code:       "action_succeeded",
-				Output:     map[string]any{"line": "current turn line"},
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "speak",
+					Arguments: map[string]any{"text": "current turn line"},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "speak",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output:     map[string]any{"line": "current turn line"},
+				}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -570,13 +572,14 @@ func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
 	if strings.Contains(req.Messages[0].Content, "current turn line") {
 		t.Fatalf("user context leaked transcript:\n%s", req.Messages[0].Content)
 	}
-	if !strings.Contains(req.Messages[1].Content, "current turn line") {
-		t.Fatalf("transcript message missing current turn result:\n%s", req.Messages[1].Content)
+	resultContent := req.Messages[len(req.Messages)-1].Content
+	if !strings.Contains(resultContent, "current turn line") {
+		t.Fatalf("transcript message missing current turn result:\n%s", resultContent)
 	}
 }
 
 func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 	longDiagnostic := "adapter rejected request\nstack trace line\n{\"raw\":\"json\",\"action_id\":\"runtime-action-123\"}" + strings.Repeat("x", 180)
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
@@ -584,16 +587,26 @@ func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "speak",
-				Status:     "rejected",
-				Code:       "adapter_rejected",
-				Message:    longDiagnostic,
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "speak",
+					Arguments: map[string]any{"text": "Hello."},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "speak",
+					Status:     "rejected",
+					Code:       "adapter_rejected",
+					Message:    longDiagnostic,
+				}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -604,7 +617,7 @@ func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
-	content := req.Messages[1].Content
+	content := req.Messages[len(req.Messages)-1].Content
 	if strings.Contains(content, "stack trace") || strings.Contains(content, "runtime-action-123") || strings.Contains(content, `{"raw"`) {
 		t.Fatalf("tool result content leaked raw diagnostic:\n%s", content)
 	}
@@ -614,7 +627,7 @@ func TestRendererDoesNotLeakRawToolResultInternals(t *testing.T) {
 }
 
 func TestRendererExposesSettleControlInstruction(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -640,29 +653,33 @@ func TestRendererExposesSettleControlInstruction(t *testing.T) {
 }
 
 func TestToolResultNormalizationIsDeterministic(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit:        1024,
-		MaxToolResultOutputBytes:      4096,
-		MaxToolResultOutputDepth:      4,
-		MaxToolResultOutputFields:     16,
-		MaxToolResultOutputArrayItems: 8,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	input := agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "inspect",
-				Status:     "succeeded",
-				Code:       "action_succeeded",
-				Output:     map[string]any{"b": float64(2), "a": float64(1)},
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "inspect",
+					Arguments: map[string]any{"query": "state"},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "inspect",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output:     map[string]any{"b": float64(2), "a": float64(1)},
+				}},
+			},
+		},
 	}
 	firstCtx, err := buildProjection(t, input)
 	if err != nil {
@@ -681,32 +698,44 @@ func TestToolResultNormalizationIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Render returned error: %v", err)
 	}
-	if first.Messages[1].Content != second.Messages[1].Content {
-		t.Fatalf("tool result rendering is not deterministic:\nfirst=%s\nsecond=%s", first.Messages[1].Content, second.Messages[1].Content)
+	firstContent := first.Messages[len(first.Messages)-1].Content
+	secondContent := second.Messages[len(second.Messages)-1].Content
+	if firstContent != secondContent {
+		t.Fatalf("tool result rendering is not deterministic:\nfirst=%s\nsecond=%s", firstContent, secondContent)
 	}
-	if strings.Index(first.Messages[1].Content, `"a"`) > strings.Index(first.Messages[1].Content, `"b"`) {
-		t.Fatalf("tool result output keys are not stable:\n%s", first.Messages[1].Content)
+	if strings.Index(firstContent, `"a"`) > strings.Index(firstContent, `"b"`) {
+		t.Fatalf("tool result output keys are not stable:\n%s", firstContent)
 	}
 }
 
 func TestToolResultNormalizationIsProviderNeutral(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "speak",
-				Status:     "succeeded",
-				Code:       "action_succeeded",
-				Output:     map[string]any{"visible": true},
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "speak",
+					Arguments: map[string]any{"text": "Hello."},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "speak",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output:     map[string]any{"visible": true},
+				}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -717,7 +746,7 @@ func TestToolResultNormalizationIsProviderNeutral(t *testing.T) {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
-	content := req.Messages[1].Content
+	content := req.Messages[len(req.Messages)-1].Content
 	for _, unwanted := range []string{"structpb", "protocolv1alpha2", "ActionResult", "protobuf"} {
 		if strings.Contains(content, unwanted) {
 			t.Fatalf("provider-neutral transcript leaked %q:\n%s", unwanted, content)
@@ -726,32 +755,36 @@ func TestToolResultNormalizationIsProviderNeutral(t *testing.T) {
 }
 
 func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit:        1024,
-		MaxToolResultOutputBytes:      4096,
-		MaxToolResultOutputDepth:      4,
-		MaxToolResultOutputFields:     16,
-		MaxToolResultOutputArrayItems: 8,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
 		RuntimePolicy: "policy",
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "inspect",
-				Status:     "succeeded",
-				Code:       "action_succeeded",
-				Output: map[string]any{
-					"visible": true,
-					"nested":  map[string]any{"mood": "happy"},
-				},
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "inspect",
+					Arguments: map[string]any{"query": "state"},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "inspect",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output: map[string]any{
+						"visible": true,
+						"nested":  map[string]any{"mood": "happy"},
+					},
+				}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -762,7 +795,7 @@ func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
-	assertContainsAll(t, req.Messages[1].Content, `"visible": true`, `"mood": "happy"`)
+	assertContainsAll(t, req.Messages[len(req.Messages)-1].Content, `"visible": true`, `"mood": "happy"`)
 }
 
 func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
@@ -774,40 +807,50 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,
 	})
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	renderer := agentcontext.NewRenderer()
 
-	projection, err := engine.Build(agentcontext.BuildInput{
+	result, err := engine.Build(agentcontext.BuildInput{
 		SessionKey:      key,
 		CanonicalTarget: target,
 		AgentDescriptor: definition.NewAgentInstanceDescriptor(key, target),
 		RuntimePolicy:   "policy",
 		Event:           &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
 		Observation:     &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
-		Transcript: []model.Message{{
-			Role: model.RoleTool,
-			ToolResults: []model.ToolResult{{
-				ToolCallID: "call_1",
-				Name:       "inspect",
-				Status:     "succeeded",
-				Code:       "action_succeeded",
-				Output: map[string]any{
-					"a": []any{"one", "two", "three"},
-					"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
-					"c": "extra field",
-				},
-			}},
-		}},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "inspect",
+					Arguments: map[string]any{"query": "state"},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "inspect",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output: map[string]any{
+						"a": []any{"one", "two", "three"},
+						"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
+						"c": "extra field",
+					},
+				}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Engine.Build returned error: %v", err)
 	}
 
-	req, err := renderer.Render(projection)
+	req, err := renderer.Render(result.Projection)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
 
-	content := req.Messages[1].Content
+	content := req.Messages[len(req.Messages)-1].Content
 	assertContainsAll(t, content, `"a"`, `"one"`, `"two"`, "_truncated")
 	for _, unwanted := range []string{"three", "extra field", "too deep"} {
 		if strings.Contains(content, unwanted) {
@@ -820,7 +863,7 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 }
 
 func TestRendererRendersProjectedRecentMemory(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	renderer := agentcontext.NewRenderer()
 	projection := agentcontext.ContextProjection{
 		RuntimePolicy: "policy",
 		AgentDescriptor: definition.AgentInstanceDescriptor{
@@ -849,9 +892,7 @@ func TestRendererRendersProjectedRecentMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -897,9 +938,7 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -930,9 +969,7 @@ func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
 }
 
 func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -981,7 +1018,7 @@ func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
 }
 
 func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -1032,9 +1069,7 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 }
 
 func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
@@ -1109,9 +1144,7 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 }
 
 func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
@@ -1165,9 +1198,7 @@ func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
 }
 
 func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -1198,9 +1229,7 @@ func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
 }
 
 func TestRendererMarksPreviousDayMemory(t *testing.T) {
-	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
-		MemoryContextSizeLimit: 1024,
-	})
+	renderer := agentcontext.NewRenderer()
 
 	agentCtx, err := buildProjection(t, agentcontext.BuildInput{
 		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
@@ -1263,7 +1292,8 @@ func buildProjection(t *testing.T, input agentcontext.BuildInput, configs ...age
 	if len(configs) > 0 {
 		config = configs[0]
 	}
-	return agentcontext.NewEngine(config).Build(input)
+	result, err := agentcontext.NewEngine(config).Build(input)
+	return result.Projection, err
 }
 
 func completeEngineInput(input agentcontext.BuildInput) agentcontext.BuildInput {

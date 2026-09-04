@@ -31,6 +31,44 @@ type BootstrapDiagnostics struct {
 	CatalogToolCount              int
 }
 
+type ToolAdmissionConfig struct {
+	MaxToolCount            int
+	MaxToolDescriptionBytes int
+	MaxToolSchemaBytes      int
+	MaxTotalToolSchemaBytes int
+}
+
+type ToolAdmissionResult struct {
+	View   TurnToolView
+	Report ToolAdmissionReport
+}
+
+type ToolAdmissionReport struct {
+	AcceptedToolCount int
+	AcceptedToolNames []string
+	DroppedToolCount  int
+	DroppedToolNames  []string
+	DroppedTools      []ToolAdmissionDrop
+	TotalSchemaBytes  int
+}
+
+type ToolAdmissionDrop struct {
+	Name   string
+	Reason string
+}
+
+const (
+	ToolDropReasonCountExceeded             = "tool_count_exceeded"
+	ToolDropReasonDescriptionTooLarge       = "tool_description_too_large"
+	ToolDropReasonSchemaTooLarge            = "tool_schema_too_large"
+	ToolDropReasonTotalSchemaBudgetExceeded = "tool_total_schema_budget_exceeded"
+
+	defaultMaxToolCount            = 64
+	defaultMaxToolDescriptionBytes = 2048
+	defaultMaxToolSchemaBytes      = 8192
+	defaultMaxTotalToolSchemaBytes = 32768
+)
+
 type EnvironmentToolCatalog struct {
 	tools map[string]Entry
 }
@@ -123,6 +161,48 @@ func (c *EnvironmentToolCatalog) Snapshot() TurnToolView {
 	return TurnToolView{tools: cloneEntries(c.tools)}
 }
 
+func (c *EnvironmentToolCatalog) BuildTurnToolView(config ToolAdmissionConfig) ToolAdmissionResult {
+	requireEnvironmentToolCatalog(c)
+	config = config.withDefaults()
+
+	admitted := make(map[string]Entry)
+	report := ToolAdmissionReport{}
+	totalSchemaBytes := 0
+
+	for _, name := range sortedMapKeys(c.tools) {
+		entry := c.tools[name]
+		descriptionBytes := len([]byte(entry.Definition.Description))
+		schemaBytes := len([]byte(entry.Definition.InputSchema))
+
+		switch {
+		case descriptionBytes > config.MaxToolDescriptionBytes:
+			report.addDrop(name, ToolDropReasonDescriptionTooLarge)
+			continue
+		case schemaBytes > config.MaxToolSchemaBytes:
+			report.addDrop(name, ToolDropReasonSchemaTooLarge)
+			continue
+		case len(admitted) >= config.MaxToolCount:
+			report.addDrop(name, ToolDropReasonCountExceeded)
+			continue
+		case totalSchemaBytes+schemaBytes > config.MaxTotalToolSchemaBytes:
+			report.addDrop(name, ToolDropReasonTotalSchemaBudgetExceeded)
+			continue
+		}
+
+		admitted[name] = entry
+		totalSchemaBytes += schemaBytes
+		report.AcceptedToolNames = append(report.AcceptedToolNames, name)
+	}
+
+	report.AcceptedToolCount = len(report.AcceptedToolNames)
+	report.DroppedToolCount = len(report.DroppedTools)
+	report.TotalSchemaBytes = totalSchemaBytes
+	return ToolAdmissionResult{
+		View:   TurnToolView{tools: admitted},
+		Report: report,
+	}
+}
+
 func requireEnvironmentToolCatalog(c *EnvironmentToolCatalog) {
 	if c == nil {
 		panic("environment tool catalog is nil")
@@ -202,4 +282,24 @@ func sortedMapKeys[V any](values map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func (c ToolAdmissionConfig) withDefaults() ToolAdmissionConfig {
+	c.MaxToolCount = positiveOrDefault(c.MaxToolCount, defaultMaxToolCount)
+	c.MaxToolDescriptionBytes = positiveOrDefault(c.MaxToolDescriptionBytes, defaultMaxToolDescriptionBytes)
+	c.MaxToolSchemaBytes = positiveOrDefault(c.MaxToolSchemaBytes, defaultMaxToolSchemaBytes)
+	c.MaxTotalToolSchemaBytes = positiveOrDefault(c.MaxTotalToolSchemaBytes, defaultMaxTotalToolSchemaBytes)
+	return c
+}
+
+func (r *ToolAdmissionReport) addDrop(name string, reason string) {
+	r.DroppedTools = append(r.DroppedTools, ToolAdmissionDrop{Name: name, Reason: reason})
+	r.DroppedToolNames = append(r.DroppedToolNames, name)
+}
+
+func positiveOrDefault(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }

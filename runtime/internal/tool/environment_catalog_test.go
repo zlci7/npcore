@@ -328,6 +328,93 @@ func TestTurnToolViewAvailableDoesNotExposeInternalSlice(t *testing.T) {
 	}
 }
 
+func TestBuildTurnToolViewAppliesStableCountAdmission(t *testing.T) {
+	catalog := mustEnvironmentCatalog(t,
+		capability("zeta", "last by name", `{"type":"object"}`),
+		capability("beta", "second by name", `{"type":"object"}`),
+		capability("alpha", "first by name", `{"type":"object"}`),
+		capability("gamma", "third by name", `{"type":"object"}`),
+	)
+
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:            2,
+		MaxToolDescriptionBytes: 64,
+		MaxToolSchemaBytes:      64,
+		MaxTotalToolSchemaBytes: 128,
+	})
+
+	if got, want := toolNames(result.View.Available()), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("admitted tool names = %v, want %v", got, want)
+	}
+	if got, want := result.Report.AcceptedToolNames, []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AcceptedToolNames = %v, want %v", got, want)
+	}
+	assertToolAdmissionDrops(t, result.Report, []ToolAdmissionDrop{
+		{Name: "gamma", Reason: ToolDropReasonCountExceeded},
+		{Name: "zeta", Reason: ToolDropReasonCountExceeded},
+	})
+	if got, want := toolNames(catalog.Available()), []string{"alpha", "beta", "gamma", "zeta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("source catalog names = %v, want unchanged %v", got, want)
+	}
+}
+
+func TestBuildTurnToolViewDropsOversizedDescriptionAndSchema(t *testing.T) {
+	catalog := mustEnvironmentCatalog(t,
+		capability("huge_description", strings.Repeat("d", 12), `{"type":"object"}`),
+		capability("huge_schema", "short", `{"type":"object","properties":{"text":{"type":"string","description":"`+strings.Repeat("s", 24)+`"}}}`),
+		capability("ok", "short", `{"type":"object"}`),
+	)
+
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:            8,
+		MaxToolDescriptionBytes: 8,
+		MaxToolSchemaBytes:      32,
+		MaxTotalToolSchemaBytes: 256,
+	})
+
+	if got, want := toolNames(result.View.Available()), []string{"ok"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("admitted tool names = %v, want %v", got, want)
+	}
+	assertToolAdmissionDrops(t, result.Report, []ToolAdmissionDrop{
+		{Name: "huge_description", Reason: ToolDropReasonDescriptionTooLarge},
+		{Name: "huge_schema", Reason: ToolDropReasonSchemaTooLarge},
+	})
+	if _, ok := result.View.Lookup("huge_description"); ok {
+		t.Fatal("oversized description tool is executable, want dropped")
+	}
+	if _, ok := result.View.Lookup("huge_schema"); ok {
+		t.Fatal("oversized schema tool is executable, want dropped")
+	}
+}
+
+func TestBuildTurnToolViewAppliesTotalSchemaGreedyAdmission(t *testing.T) {
+	alphaSchema := `{"type":"object","properties":{"a":{"type":"string"}}}`
+	betaSchema := `{"type":"object","properties":{"b":{"type":"string"}}}`
+	gammaSchema := `{"type":"object","properties":{"g":{"type":"string"}}}`
+	catalog := mustEnvironmentCatalog(t,
+		capability("gamma", "short", gammaSchema),
+		capability("alpha", "short", alphaSchema),
+		capability("beta", "short", betaSchema),
+	)
+
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:            8,
+		MaxToolDescriptionBytes: 64,
+		MaxToolSchemaBytes:      128,
+		MaxTotalToolSchemaBytes: len(alphaSchema) + len(betaSchema),
+	})
+
+	if got, want := toolNames(result.View.Available()), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("admitted tool names = %v, want %v", got, want)
+	}
+	if result.Report.TotalSchemaBytes != len(alphaSchema)+len(betaSchema) {
+		t.Fatalf("TotalSchemaBytes = %d, want %d", result.Report.TotalSchemaBytes, len(alphaSchema)+len(betaSchema))
+	}
+	assertToolAdmissionDrops(t, result.Report, []ToolAdmissionDrop{
+		{Name: "gamma", Reason: ToolDropReasonTotalSchemaBudgetExceeded},
+	})
+}
+
 func invalidToolPolicyExtensions(t *testing.T) *structpb.Struct {
 	t.Helper()
 	extensions, err := structpb.NewStruct(map[string]any{
@@ -358,6 +445,35 @@ func toolPolicyExtensions(t *testing.T, exclusivePerStep bool, settleAfterSucces
 		t.Fatalf("build extensions: %v", err)
 	}
 	return extensions
+}
+
+func mustEnvironmentCatalog(t *testing.T, capabilities ...*protocolv1alpha2.Capability) *EnvironmentToolCatalog {
+	t.Helper()
+
+	catalog, _, err := BuildEnvironmentToolCatalog(&protocolv1alpha2.CapabilityList{Capabilities: capabilities})
+	if err != nil {
+		t.Fatalf("BuildEnvironmentToolCatalog returned error: %v", err)
+	}
+	return catalog
+}
+
+func capability(name string, description string, schema string) *protocolv1alpha2.Capability {
+	return &protocolv1alpha2.Capability{
+		Name:            name,
+		Description:     description,
+		InputSchemaJson: schema,
+	}
+}
+
+func assertToolAdmissionDrops(t *testing.T, report ToolAdmissionReport, want []ToolAdmissionDrop) {
+	t.Helper()
+
+	if got := report.DroppedTools; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DroppedTools = %+v, want %+v", got, want)
+	}
+	if report.DroppedToolCount != len(want) {
+		t.Fatalf("DroppedToolCount = %d, want %d", report.DroppedToolCount, len(want))
+	}
 }
 
 func assertNilEnvironmentToolCatalogPanics(t *testing.T, access func(*EnvironmentToolCatalog)) {

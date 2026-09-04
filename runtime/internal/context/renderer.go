@@ -9,19 +9,11 @@ import (
 	"gameagent/runtime/internal/model"
 )
 
-type RendererConfig struct {
-	MemoryContextSizeLimit        int
-	MaxToolResultOutputBytes      int
-	MaxToolResultOutputDepth      int
-	MaxToolResultOutputFields     int
-	MaxToolResultOutputArrayItems int
-}
-
 type Renderer struct{}
 
 // NewRenderer creates a ContextProjection renderer. Projection selection and
 // local bounds are handled by Engine.
-func NewRenderer(config RendererConfig) Renderer {
+func NewRenderer() Renderer {
 	return Renderer{}
 }
 

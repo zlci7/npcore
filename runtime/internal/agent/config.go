@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentcontext "gameagent/runtime/internal/context"
 	"os"
 	"time"
 )
@@ -30,6 +31,19 @@ type Config struct {
 	MaxToolCallsPerTurn           int
 	MaxAsyncActionsPerTurn        int
 	MaxParallelToolCalls          int
+	MaxRequestBytes               int
+	MaxSystemBytes                int
+	MaxUserMessageBytes           int
+	MaxDefinitionBytes            int
+	MaxObservationBytes           int
+	MaxEventBytes                 int
+	MaxContextFactsBytes          int
+	MaxRecentMemoryBytes          int
+	MaxTranscriptBytes            int
+	MaxToolCount                  int
+	MaxToolDescriptionBytes       int
+	MaxToolSchemaBytes            int
+	MaxTotalToolSchemaBytes       int
 	MaxToolResultOutputBytes      int
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
@@ -53,6 +67,19 @@ type fileConfig struct {
 	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
 	MaxAsyncActionsPerTurn        int          `json:"max_async_actions_per_turn"`
 	MaxParallelToolCalls          int          `json:"max_parallel_tool_calls"`
+	MaxRequestBytes               int          `json:"max_request_bytes"`
+	MaxSystemBytes                int          `json:"max_system_bytes"`
+	MaxUserMessageBytes           int          `json:"max_user_message_bytes"`
+	MaxDefinitionBytes            int          `json:"max_definition_bytes"`
+	MaxObservationBytes           int          `json:"max_observation_bytes"`
+	MaxEventBytes                 int          `json:"max_event_bytes"`
+	MaxContextFactsBytes          int          `json:"max_context_facts_bytes"`
+	MaxRecentMemoryBytes          int          `json:"max_recent_memory_bytes"`
+	MaxTranscriptBytes            int          `json:"max_transcript_bytes"`
+	MaxToolCount                  int          `json:"max_tool_count"`
+	MaxToolDescriptionBytes       int          `json:"max_tool_description_bytes"`
+	MaxToolSchemaBytes            int          `json:"max_tool_schema_bytes"`
+	MaxTotalToolSchemaBytes       int          `json:"max_total_tool_schema_bytes"`
 	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
 	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
@@ -71,6 +98,7 @@ type PromptConfig struct {
 // DefaultConfig 返回 Agent Runtime 的默认运行配置。
 // 默认开启短期 Memory，并加载当前 Runtime 预算上限。
 func DefaultConfig() Config {
+	budget := agentcontext.DefaultBudgetConfig()
 	return Config{
 		TurnTimeout:                   90 * time.Second,
 		LLMTimeout:                    8 * time.Second,
@@ -86,10 +114,23 @@ func DefaultConfig() Config {
 		MaxToolCallsPerTurn:           6,
 		MaxAsyncActionsPerTurn:        1,
 		MaxParallelToolCalls:          4,
-		MaxToolResultOutputBytes:      8192,
-		MaxToolResultOutputDepth:      4,
-		MaxToolResultOutputFields:     64,
-		MaxToolResultOutputArrayItems: 32,
+		MaxRequestBytes:               budget.MaxRequestBytes,
+		MaxSystemBytes:                budget.MaxSystemBytes,
+		MaxUserMessageBytes:           budget.MaxUserMessageBytes,
+		MaxDefinitionBytes:            budget.MaxDefinitionBytes,
+		MaxObservationBytes:           budget.MaxObservationBytes,
+		MaxEventBytes:                 budget.MaxEventBytes,
+		MaxContextFactsBytes:          budget.MaxContextFactsBytes,
+		MaxRecentMemoryBytes:          budget.MaxRecentMemoryBytes,
+		MaxTranscriptBytes:            budget.MaxTranscriptBytes,
+		MaxToolCount:                  budget.MaxToolCount,
+		MaxToolDescriptionBytes:       budget.MaxToolDescriptionBytes,
+		MaxToolSchemaBytes:            budget.MaxToolSchemaBytes,
+		MaxTotalToolSchemaBytes:       budget.MaxTotalToolSchemaBytes,
+		MaxToolResultOutputBytes:      budget.MaxToolResultOutputBytes,
+		MaxToolResultOutputDepth:      budget.MaxToolResultOutputDepth,
+		MaxToolResultOutputFields:     budget.MaxToolResultOutputFields,
+		MaxToolResultOutputArrayItems: budget.MaxToolResultOutputArrayItems,
 		DefinitionCatalogRoot:         "",
 		Prompt: PromptConfig{
 			Language:        "Simplified Chinese",
@@ -140,6 +181,19 @@ func LoadConfigFile(path string) (Config, error) {
 		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
 		MaxAsyncActionsPerTurn:        raw.MaxAsyncActionsPerTurn,
 		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
+		MaxRequestBytes:               raw.MaxRequestBytes,
+		MaxSystemBytes:                raw.MaxSystemBytes,
+		MaxUserMessageBytes:           raw.MaxUserMessageBytes,
+		MaxDefinitionBytes:            raw.MaxDefinitionBytes,
+		MaxObservationBytes:           raw.MaxObservationBytes,
+		MaxEventBytes:                 raw.MaxEventBytes,
+		MaxContextFactsBytes:          raw.MaxContextFactsBytes,
+		MaxRecentMemoryBytes:          raw.MaxRecentMemoryBytes,
+		MaxTranscriptBytes:            raw.MaxTranscriptBytes,
+		MaxToolCount:                  raw.MaxToolCount,
+		MaxToolDescriptionBytes:       raw.MaxToolDescriptionBytes,
+		MaxToolSchemaBytes:            raw.MaxToolSchemaBytes,
+		MaxTotalToolSchemaBytes:       raw.MaxTotalToolSchemaBytes,
 		MaxToolResultOutputBytes:      raw.MaxToolResultOutputBytes,
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
@@ -227,6 +281,51 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MaxParallelToolCalls <= 0 {
 		c.MaxParallelToolCalls = defaults.MaxParallelToolCalls
+	}
+	if c.MaxRecentMemoryBytes <= 0 && c.MemoryContextSizeLimit > 0 {
+		c.MaxRecentMemoryBytes = c.MemoryContextSizeLimit
+	}
+	if c.MaxRequestBytes <= 0 {
+		c.MaxRequestBytes = defaults.MaxRequestBytes
+	}
+	if c.MaxSystemBytes <= 0 {
+		c.MaxSystemBytes = defaults.MaxSystemBytes
+	}
+	if c.MaxUserMessageBytes <= 0 {
+		c.MaxUserMessageBytes = defaults.MaxUserMessageBytes
+	}
+	if c.MaxDefinitionBytes <= 0 {
+		c.MaxDefinitionBytes = defaults.MaxDefinitionBytes
+	}
+	if c.MaxObservationBytes <= 0 {
+		c.MaxObservationBytes = defaults.MaxObservationBytes
+	}
+	if c.MaxEventBytes <= 0 {
+		c.MaxEventBytes = defaults.MaxEventBytes
+	}
+	if c.MaxContextFactsBytes <= 0 {
+		c.MaxContextFactsBytes = defaults.MaxContextFactsBytes
+	}
+	if c.MaxRecentMemoryBytes <= 0 {
+		c.MaxRecentMemoryBytes = defaults.MaxRecentMemoryBytes
+	}
+	if c.MemoryContextSizeLimit <= 0 {
+		c.MemoryContextSizeLimit = c.MaxRecentMemoryBytes
+	}
+	if c.MaxTranscriptBytes <= 0 {
+		c.MaxTranscriptBytes = defaults.MaxTranscriptBytes
+	}
+	if c.MaxToolCount <= 0 {
+		c.MaxToolCount = defaults.MaxToolCount
+	}
+	if c.MaxToolDescriptionBytes <= 0 {
+		c.MaxToolDescriptionBytes = defaults.MaxToolDescriptionBytes
+	}
+	if c.MaxToolSchemaBytes <= 0 {
+		c.MaxToolSchemaBytes = defaults.MaxToolSchemaBytes
+	}
+	if c.MaxTotalToolSchemaBytes <= 0 {
+		c.MaxTotalToolSchemaBytes = defaults.MaxTotalToolSchemaBytes
 	}
 	if c.MaxToolResultOutputBytes <= 0 {
 		c.MaxToolResultOutputBytes = defaults.MaxToolResultOutputBytes
