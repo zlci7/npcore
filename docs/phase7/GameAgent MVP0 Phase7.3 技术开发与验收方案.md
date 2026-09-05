@@ -60,7 +60,7 @@ Adapter 协议字段改造
 Stardew 实机最终验收
 ```
 
-本阶段可以保留现有 `MemoryContextSizeLimit` 的短期 memory soft limit，因为它已经存在并服务于当前 Recent Memory 渲染；但不把它扩展成完整 Context Budget。
+本阶段可以保留短期 Recent Memory soft limit，因为它已经存在并服务于当前 Recent Memory 渲染；但不把它扩展成完整 Context Budget。Phase7.4 后该运行时字段由 `MaxRecentMemoryTokens` 承接。
 
 ---
 
@@ -144,7 +144,7 @@ trimMemories
 renderMemory
 ```
 
-它会过滤 `MemoryRecord.GameTime > CurrentGameTime` 的未来记忆，并按 `MemoryContextSizeLimit` 做短期 soft limit。
+它会过滤 `MemoryRecord.GameTime > CurrentGameTime` 的未来记忆，并按 `MaxRecentMemoryTokens` 做短期 soft limit。
 
 Phase7.3 应把这类“选哪些 memory 进入本轮上下文”的逻辑归到 Context Engine，Renderer 只渲染已经选好的 Projection。
 
@@ -384,7 +384,7 @@ Context Engine 消费 `MemoryStore.Recent` 返回的短期 memory，并在 Proje
 ```text
 未来时间过滤
 同一 GameTime + 非零 SourceEventSequence 的稳定排序
-按 MemoryContextSizeLimit 做现有 soft limit
+按短期 Recent Memory soft limit 做限制
 SourceContextFacts 先于 Tool outcomes 渲染
 ```
 
@@ -400,7 +400,7 @@ arguments
 
 不再按 `speak`、`emote`、`present_dialogue`、`face_player` 等具体工具名生成特殊摘要。
 
-`arguments` 使用稳定 key 顺序的 JSON 表达，并按 `MaxToolResultOutputBytes` 等本阶段本地上限做有界投影。这个上限只保护单段输出可读性，不升级为 Phase7.4 的整体 Context Budget。
+`arguments` 使用稳定 key 顺序的 JSON 表达，并按 `MaxToolResultOutputTokens` 等本阶段本地上限做有界投影。这个上限只保护单段输出可读性，不升级为 Phase7.4 的整体 Context Budget。
 
 ## 4.8 Current Turn Transcript Projection
 
@@ -530,8 +530,8 @@ func (e Engine) Build(input BuildInput) (ContextProjection, error)
 Engine 使用和 Context 投影相关的配置：
 
 ```text
-MemoryContextSizeLimit
-MaxToolResultOutputBytes
+MaxRecentMemoryTokens
+MaxToolResultOutputTokens
 MaxToolResultOutputDepth
 MaxToolResultOutputFields
 MaxToolResultOutputArrayItems
@@ -694,7 +694,7 @@ Runtime 不从 Observation.state 推导 ContextFact
 同一 GameTime 且 SourceEventSequence 非 0 的 memory 按 sequence 稳定排序
 缺少 GameTime 或 sequence 时保持 MemoryStore 返回顺序
 SourceContextFacts 在同一条 memory 中先于 Tool outcomes
-MemoryContextSizeLimit 保持现有 soft limit 行为
+短期 Recent Memory soft limit 行为保持稳定
 Tool outcome 使用通用表达，不按 Stardew tool name 分支
 Tool outcome arguments 使用稳定 key 顺序 JSON，并按本阶段本地上限有界投影
 ```
@@ -851,7 +851,7 @@ Runtime 不从 payload / Observation.state 推导 facts
 
 ```text
 把 Renderer 中的 memory timeline selection 移到 Context Engine
-保留 MemoryContextSizeLimit soft limit
+保留 MaxRecentMemoryTokens soft limit
 替换 Stardew-specific visibleActionSummary
 ```
 

@@ -7,6 +7,7 @@
 > **Previous Gate:** Phase7.3 Accepted
 > **Review Required Before Coding:** Yes
 > **Code Baseline:** `main` @ `aff1826`
+> **Plan Amendment:** Token Budget Amendment accepted for implementation; Code Accepted remains pending user review.
 
 ---
 
@@ -114,8 +115,8 @@ Instruction
 当前配置已有：
 
 ```text
-MemoryContextSizeLimit
-MaxToolResultOutputBytes
+MaxRecentMemoryTokens
+MaxToolResultOutputTokens
 MaxToolResultOutputDepth
 MaxToolResultOutputFields
 MaxToolResultOutputArrayItems
@@ -130,7 +131,7 @@ MaxToolResultOutputArrayItems
 分段预算
 裁剪报告
 Tool schema size admission
-final request size summary
+final request estimated token summary
 ```
 
 ## 3.3 Phase7.2 已完成 Tool View 生命周期
@@ -196,52 +197,67 @@ error
 
 ## 4.2 Budget 配置
 
-Phase7.4 使用确定性的 byte proxy，不做 provider-specific tokenizer。
+Phase7.4 使用确定性的 provider-neutral estimated token，不做 provider-specific tokenizer。
 
 建议最小配置：
 
 ```text
-MaxRequestBytes
-MaxSystemBytes
-MaxUserMessageBytes
-MaxDefinitionBytes
-MaxObservationBytes
-MaxEventBytes
-MaxContextFactsBytes
-MaxRecentMemoryBytes
-MaxTranscriptBytes
+MaxRequestTokens
+MaxSystemTokens
+MaxUserMessageTokens
+MaxDefinitionTokens
+MaxObservationTokens
+MaxEventTokens
+MaxContextFactsTokens
+MaxRecentMemoryTokens
+MaxTranscriptTokens
 MaxToolCount
-MaxToolDescriptionBytes
-MaxToolSchemaBytes
-MaxTotalToolSchemaBytes
+MaxToolDescriptionTokens
+MaxToolSchemaTokens
+MaxTotalToolSchemaTokens
+MaxToolResultOutputTokens
 ```
 
 配置值为 0 或负数时使用 Runtime 默认值，不表示无限制。
 
-预算计算以 UTF-8 byte length 为准。Phase7.4 不保证和具体模型 tokenizer 完全一致。
+预算计算以 estimated token count 为准。Phase7.4 不保证和具体模型 tokenizer 完全一致。
+
+估算规则固定为：
+
+```text
+CJK、全角字符、ASCII 标点、JSON 结构字符、emoji 和其他 Unicode
+    1 rune = 1 estimated token
+
+ASCII 字母、数字、普通空白连续 run
+    ceil(run length / 4)
+
+结构化对象
+    stable compact JSON
+    再执行同一套 text estimate
+```
 
 预算尺寸分为两个层次：
 
 ```text
-Projection proxy size
-    Engine 内部用于确定性 selection 和预预算，是裁剪启发量。
-    它基于 orderedMap、stableCompactJSON 和固定 section 顺序。
-    它不复刻 Renderer 文本格式，也不对外承诺等于最终 request size。
+Projection estimated tokens
+    Engine 内部用于确定性 selection 和 section 预算，是裁剪启发量。
+    它基于 stable compact JSON 和固定 section 顺序。
+    它不复刻 Renderer 文本格式，也不对外承诺等于最终 request estimated token size。
 
-Request size
+Rendered request estimated tokens
     Renderer.Render 后，由 buildModelRequest 对最终 model.Request 计算。
-    它是 MaxSystemBytes、MaxUserMessageBytes、MaxRequestBytes 的权威检查。
+    它是 MaxSystemTokens、MaxUserMessageTokens、MaxRequestTokens 的权威检查。
 ```
 
-Section budget 使用 `Projection proxy size` 做确定性预预算；全局 `MaxRequestBytes / MaxSystemBytes / MaxUserMessageBytes` 裁剪循环使用 `Renderer.Render` 后的 `Request size` 做 fit 判定。Engine 复用真实 Renderer 计算 request 尺寸，不维护第二套文本格式估算。`buildModelRequest` 保留同一口径的最终 hard gate，作为 request 发出前的最后防线。
+Section budget 使用 projection estimated tokens 做确定性预预算；全局 `MaxRequestTokens / MaxSystemTokens / MaxUserMessageTokens` 裁剪循环使用 `Renderer.Render` 后的 rendered request estimated tokens 做 fit 判定。Engine 复用真实 Renderer 计算 request 尺寸，不维护第二套文本格式估算。`buildModelRequest` 保留同一口径的最终 hard gate，作为 request 发出前的最后防线。
 
-`RequestSizingHelper` 对最终 `model.Request` 使用 provider-neutral byte sizing 约定，不等同于 Provider tokenizer。最终 `model.Request` 超过任一 hard limit 时，`buildModelRequest` 返回 `ContextBuildReport + error`，`runBoundedSteps` 不调用 Provider、不提交 Action。
+`EstimateRequestTokens` 对最终 `model.Request` 使用 provider-neutral estimated-token sizing 约定，不等同于 Provider tokenizer。最终 `model.Request` 超过任一 hard limit 时，`buildModelRequest` 返回 `ContextBuildReport + error`，`runBoundedSteps` 不调用 Provider、不提交 Action。
 
-`ContextBuildReport` 记录稳定的 projection proxy size summary。最终 `model.Request` size summary 在 `Renderer.Render` 后由 `buildModelRequest` 使用 `RequestSizingHelper` 补齐。`RequestSizingHelper` 对已渲染的 `Messages[].Content` 按 UTF-8 byte length 计数，对 `Tools` / `Controls` 等结构化字段使用 provider-neutral canonical compact JSON。Renderer 输出变长时 request size 应随之变大，并触发 hard gate，而不是静默漂移。
+`ContextBuildReport` 记录稳定的 projection estimated token summary。最终 `model.Request` token summary 在 `Renderer.Render` 后由 `buildModelRequest` 使用 `EstimateRequestTokens` 补齐。`EstimateRequestTokens` 对已渲染的 `Messages[].Content` 按同一套 text estimate 计数，对 `Tools` / `Controls` 等结构化字段使用 stable compact JSON 后估算。Renderer 输出变长时 request estimate 应随之变大，并触发 hard gate，而不是静默漂移。
 
-`MaxSystemBytes` 和 `MaxUserMessageBytes` 约束对应 request section；`MaxRequestBytes` 是 provider-neutral request byte hard limit。若必保内容和工具在最终 request 中超过 `MaxRequestBytes`，Runtime 不裁剪必保内容，也不静默发送超预算请求；本次 build 明确失败，并在 `ContextBuildReport` 中记录 `required_context_over_budget`。若超限来自必保 section 本身，Report 同时记录 `required_section_over_budget` 作为细分原因。
+`MaxSystemTokens` 和 `MaxUserMessageTokens` 约束对应 request section；`MaxRequestTokens` 是 provider-neutral request estimated-token hard limit。若必保内容和工具在最终 request 中超过 `MaxRequestTokens`，Runtime 不裁剪必保内容，也不静默发送超预算请求；本次 build 明确失败，并在 `ContextBuildReport` 中记录 `required_context_over_budget`。若超限来自必保 section 本身，Report 同时记录 `required_section_over_budget` 作为细分原因。
 
-Phase7.4 将现有 `MemoryContextSizeLimit` 并入新的 `MaxRecentMemoryBytes` 语义。旧 JSON 字段可以作为兼容输入映射到新字段，但 Runtime 内部只能形成一份 effective budget，不能同时保留两套 Recent Memory 预算。
+Phase7.4 将旧 JSON 字段 `memory_context_size_limit` 和 `max_recent_memory_bytes` 作为兼容输入映射到 `MaxRecentMemoryTokens`。所有旧 `max_*_bytes` 字段通过 `ceil(bytes / 4)` 转为 token limit；新 token 字段优先。Runtime 内部只能形成一份 effective token budget，不能同时保留两套 Recent Memory 预算。
 
 ## 4.3 Budget 执行顺序与 Section 优先级
 
@@ -255,12 +271,12 @@ Phase7.4 固定一条预算流水线，不新增可插拔预算策略。
 3. Engine 使用 Final TurnToolView 生成完整结构化 Projection。
 4. 对 ToolCall arguments 和 ToolResult output 先应用逐项局部 bound。
 5. 构造 required minimum 和 fixed cost。
-6. 按共享 MaxDefinitionBytes 保留 Definition。
+6. 按共享 MaxDefinitionTokens 保留 Definition。
 7. Transcript 非空时保护最近一个完整因果组。
 8. 按固定顺序裁剪 optional 内容。
-9. 使用 Projection proxy sizing helper 完成 section 预预算。
+9. 使用 Projection estimated-token sizing helper 完成 section 预预算。
 10. 返回 BuildResult，或返回带 ContextBuildReport 的 budget failure。
-11. Renderer.Render 后，buildModelRequest 使用 RequestSizingHelper 执行最终 request hard gate。
+11. Renderer.Render 后，buildModelRequest 使用 EstimateRequestTokens 执行最终 request hard gate。
 ```
 
 Phase7.4 必须区分必须保留、固定成本和可以裁剪的内容。
@@ -279,7 +295,7 @@ CurrentObservation identity / revision / game_time
 固定成本：
 
 ```text
-Final TurnToolView proxy bytes
+Final TurnToolView projection estimated tokens
 ```
 
 `ContextBuildReport` 必须生成并可 trace，但它不是 Context section，不进入模型输入，也不参与预算保留列表。
@@ -306,7 +322,7 @@ ToolCall arguments
 
 Agent Definition 的优先级高于旧 Memory。预算不足时，旧 Memory 不能把当前事件、当前观察、角色定义和基础指令挤掉。
 
-`MaxDefinitionBytes` 是 Game Definition 与 Agent Definition 的共享预算。分配顺序固定为：
+`MaxDefinitionTokens` 是 Game Definition 与 Agent Definition 的共享预算。分配顺序固定为：
 
 ```text
 1. Agent Definition
@@ -431,12 +447,12 @@ SourceContextFacts 先于 Tool outcomes
 
 ```text
 先完成时间线选择和通用 projection
-再按 MaxRecentMemoryBytes 做确定性保留
+再按 MaxRecentMemoryTokens 做确定性保留
 优先保留更新的 memory
 被丢弃数量写入 ContextBuildReport
 ```
 
-`MaxRecentMemoryBytes` 使用 Recent Memory projection 的 compact JSON proxy bytes 计量，与 `ContextBuildReport.Sections["recent_memory"].ProxyBytes` 口径一致。Recent Memory 是 optional context；若最新一条 memory projection 单独超过预算，本次 build 可以丢弃全部 Recent Memory，而不是发送超预算上下文。
+`MaxRecentMemoryTokens` 使用 Recent Memory projection 的 compact JSON projection estimated tokens 计量，与 `ContextBuildReport.Sections["recent_memory"].ProjectionEstimatedTokens` 口径一致。Recent Memory 是 optional context；若最新一条 memory projection 单独超过预算，本次 build 可以丢弃全部 Recent Memory，而不是发送超预算上下文。
 
 本阶段不引入语义检索或向量相似度排序。
 
@@ -516,7 +532,7 @@ ContextProjection.Tools 来自 final admitted view。
 1. 先检查单 Tool description 上限。
 2. 再检查单 Tool schema 上限。
 3. admission 内一律按 tool name 稳定排序。
-4. 单次遍历，同时应用 MaxToolCount 和 MaxTotalToolSchemaBytes。
+4. 单次遍历，同时应用 MaxToolCount 和 MaxTotalToolSchemaTokens。
 5. 构造 Final TurnToolView 和 ToolAdmissionReport。
 ```
 
@@ -526,18 +542,18 @@ ContextProjection.Tools 来自 final admitted view。
 通过单项 description / schema 检查后的工具 i，
 仅当以下条件同时满足时保留：
     当前保留数量 < MaxToolCount
-    当前累计 schema bytes + schema_i bytes <= MaxTotalToolSchemaBytes
+    当前累计 schema estimated tokens + schema_i estimated tokens <= MaxTotalToolSchemaTokens
 
 超过 MaxToolCount
     -> 工具整项剔除
 
-description 超过 MaxToolDescriptionBytes
+description 超过 MaxToolDescriptionTokens
     -> 工具整项剔除
 
-input_schema 超过 MaxToolSchemaBytes
+input_schema 超过 MaxToolSchemaTokens
     -> 工具整项剔除
 
-所有 input_schema 总大小超过 MaxTotalToolSchemaBytes
+所有 input_schema 总大小超过 MaxTotalToolSchemaTokens
     -> 工具整项剔除直到总大小满足限制
 ```
 
@@ -553,17 +569,17 @@ Scheduler lookup
 
 Tool size admission 发生在最终 `TurnToolView` 捕获前。捕获后只能读取最终视图并记录诊断，不能继续裁剪工具。最终效果必须是模型可见工具与 Scheduler 可执行工具来自同一份最终视图。
 
-`Engine.Build` 不再剔除工具。它把 Final TurnToolView 当作固定成本，并用真实 `Request size` 驱动全局 optional context 裁剪：
+`Engine.Build` 不再剔除工具。它把 Final TurnToolView 当作固定成本，并用 rendered request estimated tokens 驱动全局 optional context 裁剪：
 
 ```text
 Renderer.Render(ContextProjection)
     ->
-RequestSizingHelper
+EstimateRequestTokens
     ->
 按固定保留顺序裁剪 optional projection
 ```
 
-如果 Final TurnToolView 加上所有 required minimum 已超过 `MaxRequestBytes`，本次 build 失败并记录 `required_context_over_budget` / `required_section_over_budget`，不能在某个 AgentStep 临时修改工具视图。
+如果 Final TurnToolView 加上所有 required minimum 已超过 `MaxRequestTokens`，本次 build 失败并记录 `required_context_over_budget` / `required_section_over_budget`，不能在某个 AgentStep 临时修改工具视图。
 
 Phase7.4 不改变 capability bootstrap、EnvironmentToolCatalog ownership 或 hot refresh 语义。
 
@@ -582,7 +598,7 @@ Engine
 
 AgentLoop
     合并 bounded ToolAdmissionReport summary。
-    在 Renderer.Render 后补齐 final request size summary。
+    在 Renderer.Render 后补齐 final request estimated token summary。
     将最终 ContextBuildReport summary 写入 trace。
 ```
 
@@ -599,7 +615,7 @@ Memory retained / dropped count
 Transcript retained / dropped count
 Tool accepted / dropped names and reasons
 ToolAdmissionReport summary
-final request size summary
+final request estimated token summary
 stable warning codes
 ```
 
@@ -650,7 +666,7 @@ Engine.Build
 Renderer.Render(BuildResult.Projection)
     -> model.Request, error
 buildModelRequest merges ToolAdmissionReport summary
-buildModelRequest adds final request size summary
+buildModelRequest adds final request estimated token summary
 buildModelRequest checks request hard limit
 return model.Request + ContextBuildReport + error
 ```
@@ -740,7 +756,7 @@ AgentLoop 负责：
 ```text
 在 Turn setup 完成 Tool admission
 把 Final TurnToolView 传给每个 AgentStep
-buildModelRequest 合并 report、补齐 final request size、执行 hard gate
+buildModelRequest 合并 report、补齐 final request estimated token size、执行 hard gate
 runBoundedSteps 消费 request / report / error，统一写 trace 和控制 Provider 调用
 ```
 
@@ -772,7 +788,7 @@ Draft 阶段不修改公开 Roadmap。
 
 ```text
 同输入同预算生成相同 Projection 和 Report
-同 Projection 生成相同 section sizes 和 proxy size summary
+同 Projection 生成相同 section estimated token summary
 预算不足时必保段落仍存在
 Agent Definition 不被旧 Memory 挤掉
 Recent Memory 按稳定顺序裁剪
@@ -782,13 +798,13 @@ Recent Memory 按稳定顺序裁剪
 裁剪后的 ToolResult output 可合法 marshal
 ContextBuildReport 记录 section included / cropped / dropped
 ContextBuildReport 记录 Definition fallback
-ContextBuildReport 记录 final request size summary
+ContextBuildReport 记录 final request estimated token summary
 预算配置为 0 或负数时使用 Runtime 默认值
-旧 MemoryContextSizeLimit 映射到 MaxRecentMemoryBytes，不产生双预算
-必保内容超过 MaxRequestBytes 时返回明确失败和 required_section_over_budget
+旧 memory_context_size_limit / max_recent_memory_bytes 映射到 MaxRecentMemoryTokens，不产生双预算
+必保内容超过 MaxRequestTokens 时返回明确失败和 required_section_over_budget
 Current Event ContextFacts core 不被旧 Memory 挤掉
 map 插入顺序不同但语义相同的输入生成相同 Projection、Request 和 Report
-固定 model.Request 下 RequestSizingHelper 输出确定
+固定 model.Request 下 EstimateRequestTokens 输出确定
 Renderer 后 final request 超过 hard limit 时返回 report + error
 ToolResult 局部 bound 先于 Transcript section budget 生效
 ```
@@ -838,8 +854,8 @@ Tool admission 只在 Turn 开始时发生一次
 step 1 / step 2 的 Final TurnToolView 完全一致
 被剔除工具不进入 model.Request.Tools
 被剔除工具不能被 Scheduler 执行
-required minimum + Final TurnToolView 超过 MaxRequestBytes 时不调用 Provider
-required minimum + Final TurnToolView 超过 MaxRequestBytes 时不提交 Action
+required minimum + Final TurnToolView 超过 MaxRequestTokens 时不调用 Provider
+required minimum + Final TurnToolView 超过 MaxRequestTokens 时不提交 Action
 Phase5 multi-step 行为不退化
 Phase6 async resume 行为不退化
 Phase7.1 Definition 行为不退化
@@ -873,7 +889,7 @@ Phase7.4 代码开发完成后必须满足：
 3. 同输入同预算生成相同 Model Request 和 Report。
 4. 当前事件、当前观察、Agent Descriptor、Instruction、Runtime Policy 不被预算裁掉。
 5. Current Event ContextFacts identity minimum 不被旧 Memory 挤掉，text 可截断为 marker。
-6. Agent Definition 优先级高于旧 Memory，MaxDefinitionBytes 先分配给 Agent Definition。
+6. Agent Definition 优先级高于旧 Memory，MaxDefinitionTokens 先分配给 Agent Definition。
 7. Recent Memory 按稳定顺序裁剪。
 8. Transcript 非空时保留最近完整因果组，缺少结果的 ToolCall 不作为合法 pending 进入下一次 build。
 9. JSON payload / state / attributes / ToolResult output 裁剪后仍是合法结构。
@@ -883,7 +899,7 @@ Phase7.4 代码开发完成后必须满足：
 13. 模型可见工具与 Scheduler 可执行工具来自同一份最终视图。
 14. Renderer 后最终 model.Request 超过 hard limit 时返回 ContextBuildReport + error，不调用 Provider，不提交 Action。
 15. ToolAdmissionReport bounded summary 由 AgentLoop 合并进 ContextBuildReport / trace。
-16. ContextBuildReport 记录 fallback、裁剪、剔除和 request size summary。
+16. ContextBuildReport 记录 fallback、裁剪、剔除和 request estimated token summary。
 17. Trace 只记录 report summary，不写入大段原始 context。
 18. Phase7.1 Definition、Phase7.2 Tool View、Phase7.3 ContextProjection 主链路不退化。
 ```
@@ -902,8 +918,8 @@ Review Phase7.4 时重点看：
 3. 是否没有重新设计 Tool View 生命周期。
 4. Tool size admission 是否是 Turn-scoped，Context budget 是否是 Step-scoped。
 5. Tool size admission 是否保证模型可见工具和 Scheduler 可执行工具一致。
-6. Budget 是否使用确定性 byte proxy，而不是 provider-specific tokenizer。
-7. Renderer 后 request hard gate 是否由 buildModelRequest 执行，并作为 MaxRequestBytes 的权威检查。
+6. Budget 是否使用确定性 estimated token，而不是 provider-specific tokenizer。
+7. Renderer 后 request hard gate 是否由 buildModelRequest 执行，并作为 MaxRequestTokens 的权威检查。
 8. Budget 执行顺序、map/list/memory/transcript 顺序是否唯一。
 9. JSON / tool schema 是否不会被截成非法结构。
 10. Transcript 是否保持 ToolCall / ToolResult 成对语义。
@@ -948,7 +964,7 @@ BuildResult
 ContextBuildReport
 budget failure error
 effective budget config
-section size summary
+section estimated token summary
 RendererConfig / NewRenderer(config) dead config cleanup
 ```
 
@@ -974,9 +990,9 @@ Current Event ContextFacts minimum
 Recent Memory budget
 Transcript causal group budget
 Observation / Event structured cropping
-Projection byte proxy sizing helper
-RequestSizingHelper
-config migration from MemoryContextSizeLimit
+Projection estimated-token sizing helper
+EstimateRequestTokens
+config migration from memory_context_size_limit / max_recent_memory_bytes
 ```
 
 验收点：

@@ -324,8 +324,8 @@ Phase7.5 不改变 `ContextBuildReport` schema，但需要在 Stardew-shaped 集
 ```text
 context_request_built trace event 出现
 report summary 记录 definition fallback 状态
-report summary 记录 section size summary
-report summary 记录 final request size summary
+report summary 记录 section estimated token summary
+report summary 记录 final request estimated token summary
 report summary 记录 ToolAdmissionReport bounded summary
 report 不包含完整 prompt 文本
 report 不包含大段 Observation.state 原文
