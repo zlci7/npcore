@@ -85,6 +85,35 @@ func TestEstimateStableJSONIncreasesWithAdditionalContent(t *testing.T) {
 	}
 }
 
+func TestEstimateJSONDocumentNormalizesEquivalentJSON(t *testing.T) {
+	compact := `{"description":"你好","type":"object"}`
+	escaped := `{"type":"object","description":"\u4f60\u597d"}`
+	pretty := `{
+  "type": "object",
+  "description": "你好"
+}`
+
+	compactTokens, err := EstimateJSONDocument(compact)
+	if err != nil {
+		t.Fatalf("EstimateJSONDocument(compact) error = %v", err)
+	}
+	for _, item := range []struct {
+		name string
+		json string
+	}{
+		{name: "escaped", json: escaped},
+		{name: "pretty", json: pretty},
+	} {
+		got, err := EstimateJSONDocument(item.json)
+		if err != nil {
+			t.Fatalf("EstimateJSONDocument(%s) error = %v", item.name, err)
+		}
+		if got != compactTokens {
+			t.Fatalf("EstimateJSONDocument(%s) = %d, want %d", item.name, got, compactTokens)
+		}
+	}
+}
+
 func repeatRune(r rune, count int) string {
 	out := make([]rune, count)
 	for i := range out {

@@ -179,7 +179,10 @@ func (c *EnvironmentToolCatalog) BuildTurnToolView(config ToolAdmissionConfig) T
 	for _, name := range sortedMapKeys(c.tools) {
 		entry := c.tools[name]
 		descriptionEstimatedTokens := tokenestimate.EstimateText(entry.Definition.Description)
-		schemaEstimatedTokens := tokenestimate.EstimateText(entry.Definition.InputSchema)
+		schemaEstimatedTokens, err := tokenestimate.EstimateJSONDocument(entry.Definition.InputSchema)
+		if err != nil {
+			panic(fmt.Sprintf("estimate tool schema tokens: %v", err))
+		}
 
 		switch {
 		case descriptionEstimatedTokens > config.MaxToolDescriptionTokens:

@@ -1,22 +1,29 @@
 package context
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/tokenestimate"
 	"gameagent/runtime/internal/tool"
 )
 
-type requestMessageForSizing struct {
+type requestMessageStructureForSizing struct {
 	Role        model.Role         `json:"role,omitempty"`
-	Content     string             `json:"content,omitempty"`
 	ToolCalls   []model.ToolCall   `json:"tool_calls,omitempty"`
 	ToolResults []model.ToolResult `json:"tool_results,omitempty"`
 }
 
+type requestToolForSizing struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	InputSchema any    `json:"input_schema,omitempty"`
+}
+
 func EstimateRequestTokens(req model.Request) (RequestTokenSummary, error) {
-	toolsEstimatedTokens, err := estimateRequestSectionTokens(req.Tools)
+	toolsEstimatedTokens, err := estimateRequestTools(req.Tools)
 	if err != nil {
 		return RequestTokenSummary{}, err
 	}
@@ -43,28 +50,59 @@ func measureMessages(messages []model.Message) (int, int, error) {
 	if len(messages) == 0 {
 		return 0, 0, nil
 	}
-	items := make([]requestMessageForSizing, 0, len(messages))
+	items := make([]requestMessageStructureForSizing, 0, len(messages))
+	contentEstimatedTokens := 0
 	userEstimatedTokens := 0
 	for _, message := range messages {
-		items = append(items, requestMessageForSizing{
+		contentTokens := tokenestimate.EstimateText(message.Content)
+		contentEstimatedTokens += contentTokens
+		items = append(items, requestMessageStructureForSizing{
 			Role:        message.Role,
-			Content:     message.Content,
 			ToolCalls:   message.ToolCalls,
 			ToolResults: message.ToolResults,
 		})
 		if message.Role == model.RoleUser {
-			userEstimatedTokens += tokenestimate.EstimateText(message.Content)
+			userEstimatedTokens += contentTokens
 		}
 	}
-	messagesEstimatedTokens, err := estimateRequestSectionTokens(items)
+	structureEstimatedTokens, err := estimateRequestSectionTokens(items)
 	if err != nil {
 		return 0, 0, err
 	}
-	return messagesEstimatedTokens, userEstimatedTokens, nil
+	return contentEstimatedTokens + structureEstimatedTokens, userEstimatedTokens, nil
 }
 
 func estimateRequestSectionTokens(value any) (int, error) {
 	return tokenestimate.EstimateStableJSON(value)
+}
+
+func estimateRequestTools(tools []model.ToolDefinition) (int, error) {
+	if len(tools) == 0 {
+		return 0, nil
+	}
+	items := make([]requestToolForSizing, 0, len(tools))
+	for _, tool := range tools {
+		schema, err := parseJSONDocumentForSizing(tool.InputSchema)
+		if err != nil {
+			return 0, err
+		}
+		items = append(items, requestToolForSizing{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: schema,
+		})
+	}
+	return estimateRequestSectionTokens(items)
+}
+
+func parseJSONDocumentForSizing(document string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(document))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 func RequestEstimatedTokensExceedBudget(summary RequestTokenSummary, budget BudgetConfig) bool {

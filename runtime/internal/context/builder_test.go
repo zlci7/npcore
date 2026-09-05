@@ -800,58 +800,11 @@ func TestToolResultIncludesBoundedStructuredOutput(t *testing.T) {
 }
 
 func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
-	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
-	target := &protocolv1alpha2.EntityRef{EntityId: key.EntityID, DefinitionId: key.EntityID}
-	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MaxToolResultOutputTokens:     300,
-		MaxToolResultOutputDepth:      2,
-		MaxToolResultOutputFields:     2,
-		MaxToolResultOutputArrayItems: 2,
+	content := renderToolResultOutputContent(t, 300, map[string]any{
+		"a": []any{"one", "two", "three"},
+		"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
+		"c": "extra field",
 	})
-	renderer := agentcontext.NewRenderer()
-
-	result, err := engine.Build(agentcontext.BuildInput{
-		SessionKey:      key,
-		CanonicalTarget: target,
-		AgentDescriptor: definition.NewAgentInstanceDescriptor(key, target),
-		RuntimePolicy:   "policy",
-		Event:           &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
-		Observation:     &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
-		Transcript: []model.Message{
-			{
-				Role: model.RoleAssistant,
-				ToolCalls: []model.ToolCall{{
-					ID:        "call_1",
-					Name:      "inspect",
-					Arguments: map[string]any{"query": "state"},
-				}},
-			},
-			{
-				Role: model.RoleTool,
-				ToolResults: []model.ToolResult{{
-					ToolCallID: "call_1",
-					Name:       "inspect",
-					Status:     "succeeded",
-					Code:       "action_succeeded",
-					Output: map[string]any{
-						"a": []any{"one", "two", "three"},
-						"b": map[string]any{"nested": map[string]any{"leaf": "too deep"}},
-						"c": "extra field",
-					},
-				}},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Engine.Build returned error: %v", err)
-	}
-
-	req, err := renderer.Render(result.Projection)
-	if err != nil {
-		t.Fatalf("Render returned error: %v", err)
-	}
-
-	content := req.Messages[len(req.Messages)-1].Content
 	assertContainsAll(t, content, `"a"`, `"one"`, `"two"`, "_truncated")
 	for _, unwanted := range []string{"three", "extra field", "too deep"} {
 		if strings.Contains(content, unwanted) {
@@ -864,6 +817,65 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 	}
 	if outputTokens > 300 {
 		t.Fatalf("tool result output = %d estimated tokens, want <= 300:\n%s", outputTokens, content)
+	}
+}
+
+func TestToolArgumentsProjectionUsesMarkerWithinTokenBounds(t *testing.T) {
+	markerTokens, err := tokenestimate.EstimateStableJSON(map[string]any{"_truncated": true})
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(marker) returned error: %v", err)
+	}
+	contents := renderToolTranscriptContents(t, markerTokens, map[string]any{
+		"text": strings.Repeat("overflow ", 100),
+	}, map[string]any{"visible": true})
+
+	arguments := extractJSONFieldMap(t, contents[0], "arguments")
+	if got, ok := arguments["_truncated"].(bool); !ok || !got {
+		t.Fatalf("arguments marker = %#v, want true", arguments["_truncated"])
+	}
+	argumentTokens, err := tokenestimate.EstimateStableJSON(arguments)
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(arguments) returned error: %v", err)
+	}
+	if argumentTokens > markerTokens {
+		t.Fatalf("tool arguments marker = %d estimated tokens, want <= %d:\n%s", argumentTokens, markerTokens, contents[0])
+	}
+}
+
+func TestToolResultOutputProjectionUsesMarkerWithinTokenBounds(t *testing.T) {
+	markerTokens, err := tokenestimate.EstimateStableJSON(map[string]any{"_truncated": true})
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(marker) returned error: %v", err)
+	}
+	content := renderToolResultOutputContent(t, markerTokens, map[string]any{
+		"text": strings.Repeat("overflow ", 100),
+	})
+
+	output := extractJSONFieldMap(t, content, "output")
+	if got, ok := output["_truncated"].(bool); !ok || !got {
+		t.Fatalf("output marker = %#v, want true", output["_truncated"])
+	}
+	outputTokens, err := tokenestimate.EstimateStableJSON(output)
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(output) returned error: %v", err)
+	}
+	if outputTokens > markerTokens {
+		t.Fatalf("tool result marker = %d estimated tokens, want <= %d:\n%s", outputTokens, markerTokens, content)
+	}
+}
+
+func TestToolResultOutputProjectionDropsOutputWhenMarkerCannotFit(t *testing.T) {
+	markerTokens, err := tokenestimate.EstimateStableJSON(map[string]any{"_truncated": true})
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(marker) returned error: %v", err)
+	}
+	content := renderToolResultOutputContent(t, markerTokens-1, map[string]any{
+		"text": strings.Repeat("overflow ", 100),
+	})
+
+	entry := extractJSONEntry(t, content)
+	if _, ok := entry["output"]; ok {
+		t.Fatalf("tool result output = %#v, want omitted when marker exceeds token bound", entry["output"])
 	}
 }
 
@@ -1393,18 +1405,21 @@ func assertContainsAll(t *testing.T, content string, values ...string) {
 func extractJSONField(t *testing.T, content string, field string) string {
 	t.Helper()
 
-	var values []map[string]any
-	if err := json.Unmarshal([]byte(content), &values); err != nil {
-		t.Fatalf("content is not JSON array: %v\n%s", err, content)
-	}
-	if len(values) == 0 {
-		t.Fatalf("content has no values: %s", content)
-	}
-	got, _ := values[0][field].(string)
+	got, _ := extractJSONEntry(t, content)[field].(string)
 	return got
 }
 
 func extractJSONFieldMap(t *testing.T, content string, field string) map[string]any {
+	t.Helper()
+
+	got, ok := extractJSONEntry(t, content)[field].(map[string]any)
+	if !ok {
+		t.Fatalf("content field %q is not an object: %s", field, content)
+	}
+	return got
+}
+
+func extractJSONEntry(t *testing.T, content string) map[string]any {
 	t.Helper()
 
 	var values []map[string]any
@@ -1414,11 +1429,73 @@ func extractJSONFieldMap(t *testing.T, content string, field string) map[string]
 	if len(values) == 0 {
 		t.Fatalf("content has no values: %s", content)
 	}
-	got, ok := values[0][field].(map[string]any)
-	if !ok {
-		t.Fatalf("content field %q = %#v, want object", field, values[0][field])
+	return values[0]
+}
+
+func renderToolResultOutputContent(t *testing.T, maxOutputTokens int, output map[string]any) string {
+	t.Helper()
+
+	contents := renderToolTranscriptContents(t, maxOutputTokens, map[string]any{"query": "state"}, output)
+	return contents[len(contents)-1]
+}
+
+func renderToolTranscriptContents(t *testing.T, maxOutputTokens int, arguments map[string]any, output map[string]any) []string {
+	t.Helper()
+
+	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
+	target := &protocolv1alpha2.EntityRef{EntityId: key.EntityID, DefinitionId: key.EntityID}
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
+		MaxToolResultOutputTokens:     maxOutputTokens,
+		MaxToolResultOutputDepth:      2,
+		MaxToolResultOutputFields:     2,
+		MaxToolResultOutputArrayItems: 2,
+	})
+	result, err := engine.Build(agentcontext.BuildInput{
+		SessionKey:      key,
+		CanonicalTarget: target,
+		AgentDescriptor: definition.NewAgentInstanceDescriptor(key, target),
+		RuntimePolicy:   "policy",
+		Event:           &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: key.WorldID, TargetEntityId: key.EntityID},
+		Observation:     &protocolv1alpha2.Observation{WorldId: key.WorldID, EntityId: key.EntityID},
+		Transcript: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "inspect",
+					Arguments: arguments,
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResults: []model.ToolResult{{
+					ToolCallID: "call_1",
+					Name:       "inspect",
+					Status:     "succeeded",
+					Code:       "action_succeeded",
+					Output:     output,
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Engine.Build returned error: %v", err)
 	}
-	return got
+
+	req, err := agentcontext.NewRenderer().Render(result.Projection)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	contents := make([]string, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		if message.Role == model.RoleAssistant || message.Role == model.RoleTool {
+			contents = append(contents, message.Content)
+		}
+	}
+	if len(contents) == 0 {
+		t.Fatalf("rendered request has no transcript messages: %+v", req)
+	}
+	return contents
 }
 
 func mustMarshalJSONBytes(t *testing.T, value any) []byte {

@@ -1632,6 +1632,60 @@ func TestEstimateRequestTokensIsDeterministicForFixedRequest(t *testing.T) {
 	}
 }
 
+func TestEstimateRequestTokensCountsMessageContentWithoutJSONEscaping(t *testing.T) {
+	content := strings.Repeat("\"\\\n", 20)
+	req := model.Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: content,
+		}},
+	}
+
+	size := estimateRequestTokensForTest(t, req)
+	contentTokens := tokenestimate.EstimateText(content)
+	structureTokens, err := tokenestimate.EstimateStableJSON([]map[string]any{{"role": model.RoleUser}})
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(structure) error = %v", err)
+	}
+	if size.UserMessageEstimatedTokens != contentTokens {
+		t.Fatalf("UserMessageEstimatedTokens = %d, want content estimate %d", size.UserMessageEstimatedTokens, contentTokens)
+	}
+	if size.MessagesEstimatedTokens != contentTokens+structureTokens {
+		t.Fatalf("MessagesEstimatedTokens = %d, want content %d + structure %d", size.MessagesEstimatedTokens, contentTokens, structureTokens)
+	}
+}
+
+func TestEstimateRequestTokensNormalizesToolInputSchemas(t *testing.T) {
+	compactSchema := `{"description":"你好","type":"object"}`
+	prettySchema := `{
+  "type": "object",
+  "description": "\u4f60\u597d"
+}`
+	compact := model.Request{
+		Tools: []model.ToolDefinition{{
+			Name:        "inspect",
+			Description: "Inspect.",
+			InputSchema: compactSchema,
+		}},
+	}
+	pretty := model.Request{
+		Tools: []model.ToolDefinition{{
+			Name:        "inspect",
+			Description: "Inspect.",
+			InputSchema: prettySchema,
+		}},
+	}
+
+	compactSize := estimateRequestTokensForTest(t, compact)
+	prettySize := estimateRequestTokensForTest(t, pretty)
+	if prettySize.ToolsEstimatedTokens != compactSize.ToolsEstimatedTokens {
+		t.Fatalf("ToolsEstimatedTokens = %d for pretty schema, want compact estimate %d", prettySize.ToolsEstimatedTokens, compactSize.ToolsEstimatedTokens)
+	}
+	if prettySize.TotalEstimatedTokens != compactSize.TotalEstimatedTokens {
+		t.Fatalf("TotalEstimatedTokens = %d for pretty schema, want compact estimate %d", prettySize.TotalEstimatedTokens, compactSize.TotalEstimatedTokens)
+	}
+}
+
 func validEngineInput(t *testing.T) agentcontext.BuildInput {
 	t.Helper()
 

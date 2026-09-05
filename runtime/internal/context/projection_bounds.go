@@ -32,14 +32,14 @@ func positiveOrDefault(value int, fallback int) int {
 }
 
 func projectToolArguments(arguments map[string]any, bounds projectionBounds) map[string]any {
-	return projectBoundedMap(arguments, bounds, "tool arguments exceeded token limit")
+	return projectBoundedMap(arguments, bounds)
 }
 
 func projectToolResultOutput(output map[string]any, bounds projectionBounds) map[string]any {
-	return projectBoundedMap(output, bounds, "tool result output exceeded token limit")
+	return projectBoundedMap(output, bounds)
 }
 
-func projectBoundedMap(values map[string]any, bounds projectionBounds, truncationMessage string) map[string]any {
+func projectBoundedMap(values map[string]any, bounds projectionBounds) map[string]any {
 	if len(values) == 0 {
 		return nil
 	}
@@ -51,11 +51,18 @@ func projectBoundedMap(values map[string]any, bounds projectionBounds, truncatio
 
 	estimatedTokens, err := tokenestimate.EstimateStableJSON(orderedMap(projected))
 	if err == nil && bounds.maxTokens > 0 && estimatedTokens > bounds.maxTokens {
-		return map[string]any{
-			"_truncated": truncationMessage,
-		}
+		return boundedTruncationMarker(bounds)
 	}
 	return projected
+}
+
+func boundedTruncationMarker(bounds projectionBounds) map[string]any {
+	marker := map[string]any{"_truncated": true}
+	estimatedTokens, err := tokenestimate.EstimateStableJSON(marker)
+	if err == nil && bounds.maxTokens > 0 && estimatedTokens > bounds.maxTokens {
+		return nil
+	}
+	return marker
 }
 
 func projectOutputValue(value any, depth int, bounds projectionBounds) any {

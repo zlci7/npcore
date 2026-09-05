@@ -420,6 +420,45 @@ func TestBuildTurnToolViewAppliesTotalSchemaGreedyAdmission(t *testing.T) {
 	})
 }
 
+func TestBuildTurnToolViewUsesNormalizedSchemaEstimate(t *testing.T) {
+	compactSchema := `{"description":"你好","type":"object"}`
+	escapedSchema := `{"type":"object","description":"\u4f60\u597d"}`
+	prettySchema := `{
+  "type": "object",
+  "description": "你好"
+}`
+	catalog := mustEnvironmentCatalog(t,
+		capability("compact", "short", compactSchema),
+		capability("escaped", "short", escapedSchema),
+		capability("pretty", "short", prettySchema),
+	)
+
+	schemaTokens, err := tokenestimate.EstimateJSONDocument(compactSchema)
+	if err != nil {
+		t.Fatalf("EstimateJSONDocument(compactSchema) error = %v", err)
+	}
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:             8,
+		MaxToolDescriptionTokens: 64,
+		MaxToolSchemaTokens:      schemaTokens,
+		MaxTotalToolSchemaTokens: schemaTokens * 3,
+	})
+
+	if got, want := toolNames(result.View.Available()), []string{"compact", "escaped", "pretty"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("admitted tool names = %v, want %v", got, want)
+	}
+	if result.Report.TotalSchemaEstimatedTokens != schemaTokens*3 {
+		t.Fatalf("TotalSchemaEstimatedTokens = %d, want %d", result.Report.TotalSchemaEstimatedTokens, schemaTokens*3)
+	}
+	entry, ok := result.View.Lookup("pretty")
+	if !ok {
+		t.Fatal("pretty schema tool missing from admitted view")
+	}
+	if entry.Definition.InputSchema != prettySchema {
+		t.Fatalf("InputSchema was rewritten:\ngot  %q\nwant %q", entry.Definition.InputSchema, prettySchema)
+	}
+}
+
 func TestBuildTurnToolViewBoundsAdmissionDiagnostics(t *testing.T) {
 	capabilities := make([]*protocolv1alpha2.Capability, 0, 25)
 	for i := 0; i < 25; i++ {

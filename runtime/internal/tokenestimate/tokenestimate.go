@@ -1,6 +1,9 @@
 package tokenestimate
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // EstimateText returns a deterministic provider-neutral token estimate.
 func EstimateText(value string) int {
@@ -42,6 +45,17 @@ func EstimateStableJSON(value any) (int, error) {
 		return 0, err
 	}
 	return EstimateText(data), nil
+}
+
+// EstimateJSONDocument estimates a parsed JSON document after stable compaction.
+func EstimateJSONDocument(document string) (int, error) {
+	decoder := json.NewDecoder(strings.NewReader(document))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return 0, err
+	}
+	return EstimateStableJSON(value)
 }
 
 func isASCIIWordLike(r rune) bool {
