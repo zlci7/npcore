@@ -44,12 +44,16 @@ type ToolAdmissionResult struct {
 }
 
 type ToolAdmissionReport struct {
-	AcceptedToolCount int
-	AcceptedToolNames []string
-	DroppedToolCount  int
-	DroppedToolNames  []string
-	DroppedTools      []ToolAdmissionDrop
-	TotalSchemaBytes  int
+	AcceptedToolCount               int
+	AcceptedToolNames               []string
+	AcceptedToolNamesTruncatedCount int
+	DroppedToolCount                int
+	DroppedToolNames                []string
+	DroppedToolNamesTruncatedCount  int
+	DroppedTools                    []ToolAdmissionDrop
+	DroppedToolsTruncatedCount      int
+	DroppedReasonCounts             map[string]int
+	TotalSchemaBytes                int
 }
 
 type ToolAdmissionDrop struct {
@@ -62,6 +66,8 @@ const (
 	ToolDropReasonDescriptionTooLarge       = "tool_description_too_large"
 	ToolDropReasonSchemaTooLarge            = "tool_schema_too_large"
 	ToolDropReasonTotalSchemaBudgetExceeded = "tool_total_schema_budget_exceeded"
+
+	MaxToolAdmissionDiagnosticNames = 16
 
 	defaultMaxToolCount            = 64
 	defaultMaxToolDescriptionBytes = 2048
@@ -191,11 +197,9 @@ func (c *EnvironmentToolCatalog) BuildTurnToolView(config ToolAdmissionConfig) T
 
 		admitted[name] = entry
 		totalSchemaBytes += schemaBytes
-		report.AcceptedToolNames = append(report.AcceptedToolNames, name)
+		report.addAccepted(name)
 	}
 
-	report.AcceptedToolCount = len(report.AcceptedToolNames)
-	report.DroppedToolCount = len(report.DroppedTools)
 	report.TotalSchemaBytes = totalSchemaBytes
 	return ToolAdmissionResult{
 		View:   TurnToolView{tools: admitted},
@@ -293,8 +297,30 @@ func (c ToolAdmissionConfig) withDefaults() ToolAdmissionConfig {
 }
 
 func (r *ToolAdmissionReport) addDrop(name string, reason string) {
-	r.DroppedTools = append(r.DroppedTools, ToolAdmissionDrop{Name: name, Reason: reason})
-	r.DroppedToolNames = append(r.DroppedToolNames, name)
+	r.DroppedToolCount++
+	if len(r.DroppedToolNames) < MaxToolAdmissionDiagnosticNames {
+		r.DroppedToolNames = append(r.DroppedToolNames, name)
+	} else {
+		r.DroppedToolNamesTruncatedCount++
+	}
+	if len(r.DroppedTools) < MaxToolAdmissionDiagnosticNames {
+		r.DroppedTools = append(r.DroppedTools, ToolAdmissionDrop{Name: name, Reason: reason})
+	} else {
+		r.DroppedToolsTruncatedCount++
+	}
+	if r.DroppedReasonCounts == nil {
+		r.DroppedReasonCounts = make(map[string]int)
+	}
+	r.DroppedReasonCounts[reason]++
+}
+
+func (r *ToolAdmissionReport) addAccepted(name string) {
+	r.AcceptedToolCount++
+	if len(r.AcceptedToolNames) < MaxToolAdmissionDiagnosticNames {
+		r.AcceptedToolNames = append(r.AcceptedToolNames, name)
+	} else {
+		r.AcceptedToolNamesTruncatedCount++
+	}
 }
 
 func positiveOrDefault(value int, fallback int) int {

@@ -94,12 +94,16 @@ type RetentionReport struct {
 }
 
 type ToolAdmissionSummary struct {
-	AcceptedToolCount int
-	AcceptedToolNames []string
-	DroppedToolCount  int
-	DroppedToolNames  []string
-	DroppedTools      []tool.ToolAdmissionDrop
-	TotalSchemaBytes  int
+	AcceptedToolCount               int
+	AcceptedToolNames               []string
+	AcceptedToolNamesTruncatedCount int
+	DroppedToolCount                int
+	DroppedToolNames                []string
+	DroppedToolNamesTruncatedCount  int
+	DroppedTools                    []tool.ToolAdmissionDrop
+	DroppedToolsTruncatedCount      int
+	DroppedReasonCounts             map[string]int
+	TotalSchemaBytes                int
 }
 
 type RequestSizeSummary struct {
@@ -388,8 +392,197 @@ func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, r
 		report.addReason(ReasonContextFactsBudgetExceeded)
 		sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
 	}
+	projection, sectionErr := enforceRequiredSectionBudgets(projection, budget, &report, sectionCropped)
+	if sectionErr != nil {
+		err = sectionErr
+	}
+	if err == nil {
+		projection, report, err = enforceGlobalRequestBudget(projection, budget, report, sectionCropped)
+	}
 	report.Sections = markCroppedSections(sectionReportsForProjection(projection), sectionCropped)
 	return projection, report, err
+}
+
+func enforceRequiredSectionBudgets(projection ContextProjection, budget BudgetConfig, report *ContextBuildReport, sectionCropped map[string]string) (ContextProjection, error) {
+	var err error
+	if budget.MaxEventBytes > 0 && sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
+		if dropEventPayload(&projection) {
+			report.addReason(ReasonEventBudgetExceeded)
+			sectionCropped["current_event"] = ReasonEventBudgetExceeded
+		}
+		if sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
+			report.addReason(ReasonEventBudgetExceeded)
+			report.addReason(ReasonRequiredContextOverBudget)
+			report.addReason(ReasonRequiredSectionOverBudget)
+			sectionCropped["current_event"] = ReasonEventBudgetExceeded
+			err = firstError(err, fmt.Errorf("%w: current event required shell exceeds byte budget", ErrBudgetExceeded))
+		}
+	}
+	if budget.MaxObservationBytes > 0 && sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+		if dropObservationOptionalFields(&projection) {
+			report.addReason(ReasonObservationBudgetExceeded)
+			sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
+		}
+		if sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+			report.addReason(ReasonObservationBudgetExceeded)
+			report.addReason(ReasonRequiredContextOverBudget)
+			report.addReason(ReasonRequiredSectionOverBudget)
+			sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
+			err = firstError(err, fmt.Errorf("%w: current observation required minimum exceeds byte budget", ErrBudgetExceeded))
+		}
+	}
+	if budget.MaxContextFactsBytes > 0 && sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+		if dropContextFactOptionalFields(&projection) {
+			report.addReason(ReasonContextFactsBudgetExceeded)
+			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
+		}
+		if sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+			report.addReason(ReasonContextFactsBudgetExceeded)
+			report.addReason(ReasonRequiredContextOverBudget)
+			report.addReason(ReasonRequiredSectionOverBudget)
+			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
+			err = firstError(err, fmt.Errorf("%w: current event context facts required minimum exceeds byte budget", ErrBudgetExceeded))
+		}
+	}
+	return projection, err
+}
+
+func enforceGlobalRequestBudget(projection ContextProjection, budget BudgetConfig, report ContextBuildReport, sectionCropped map[string]string) (ContextProjection, ContextBuildReport, error) {
+	if projectionFitsRequestBudget(projection, budget) {
+		return projection, report, nil
+	}
+
+	for !projectionFitsRequestBudget(projection, budget) {
+		switch {
+		case dropOldestRecentMemory(&projection):
+			report.RecentMemory.RetainedCount = len(projection.RecentMemory)
+			report.RecentMemory.DroppedCount++
+			report.addReason(ReasonMemoryBudgetExceeded)
+			sectionCropped["recent_memory"] = ReasonMemoryBudgetExceeded
+		case trimTranscriptToLatestGroup(&projection, &report):
+			report.addReason(ReasonTranscriptBudgetExceeded)
+			sectionCropped["current_turn_transcript"] = ReasonTranscriptBudgetExceeded
+		case dropContextFactOptionalFields(&projection):
+			report.addReason(ReasonContextFactsBudgetExceeded)
+			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
+		case dropEventPayload(&projection):
+			report.addReason(ReasonEventBudgetExceeded)
+			sectionCropped["current_event"] = ReasonEventBudgetExceeded
+		case dropObservationOptionalFields(&projection):
+			report.addReason(ReasonObservationBudgetExceeded)
+			sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
+		case dropGameDefinitionOptionalFields(&projection):
+			report.addReason(ReasonDefinitionBudgetExceeded)
+			sectionCropped["game_definition"] = ReasonDefinitionBudgetExceeded
+		case dropAgentDefinitionOptionalFields(&projection):
+			report.addReason(ReasonDefinitionBudgetExceeded)
+			sectionCropped["agent_definition"] = ReasonDefinitionBudgetExceeded
+		default:
+			size := measureProjectionRequest(projection)
+			report.addReason(ReasonRequiredContextOverBudget)
+			if RequiredRequestSectionExceedsBudget(size, budget) {
+				report.addReason(ReasonRequiredSectionOverBudget)
+			}
+			return projection, report, RequestSizeBudgetError(size, budget)
+		}
+	}
+	return projection, report, nil
+}
+
+func projectionFitsRequestBudget(projection ContextProjection, budget BudgetConfig) bool {
+	return !RequestSizeExceedsBudget(measureProjectionRequest(projection), budget)
+}
+
+func measureProjectionRequest(projection ContextProjection) RequestSizeSummary {
+	req, err := NewRenderer().Render(projection)
+	if err != nil {
+		return RequestSizeSummary{}
+	}
+	return MeasureRequest(req)
+}
+
+func dropOldestRecentMemory(projection *ContextProjection) bool {
+	if len(projection.RecentMemory) == 0 {
+		return false
+	}
+	projection.RecentMemory = append([]MemoryProjection(nil), projection.RecentMemory[1:]...)
+	return true
+}
+
+func trimTranscriptToLatestGroup(projection *ContextProjection, report *ContextBuildReport) bool {
+	if len(projection.CurrentTurnTranscript) == 0 {
+		return false
+	}
+	groups, err := transcriptCausalGroups(projection.CurrentTurnTranscript)
+	if err != nil || len(groups) == 0 {
+		return false
+	}
+	latest := flattenTranscriptGroups(groups[len(groups)-1:])
+	if len(latest) == len(projection.CurrentTurnTranscript) {
+		return false
+	}
+	report.Transcript.DroppedCount += len(projection.CurrentTurnTranscript) - len(latest)
+	report.Transcript.RetainedCount = len(latest)
+	projection.CurrentTurnTranscript = latest
+	return true
+}
+
+func dropContextFactOptionalFields(projection *ContextProjection) bool {
+	changed := false
+	for i := range projection.CurrentEventContextFacts {
+		if projection.CurrentEventContextFacts[i].Text != "" {
+			projection.CurrentEventContextFacts[i].Text = ""
+			changed = true
+		}
+		if len(projection.CurrentEventContextFacts[i].Attributes) > 0 {
+			projection.CurrentEventContextFacts[i].Attributes = nil
+			changed = true
+		}
+	}
+	return changed
+}
+
+func dropEventPayload(projection *ContextProjection) bool {
+	if len(projection.CurrentEvent.Payload) == 0 {
+		return false
+	}
+	projection.CurrentEvent.Payload = nil
+	return true
+}
+
+func dropObservationOptionalFields(projection *ContextProjection) bool {
+	changed := len(projection.CurrentObservation.NearbyEntities) > 0 ||
+		len(projection.CurrentObservation.Extensions) > 0 ||
+		len(projection.CurrentObservation.State) > 0
+	projection.CurrentObservation.NearbyEntities = nil
+	projection.CurrentObservation.Extensions = nil
+	projection.CurrentObservation.State = nil
+	return changed
+}
+
+func dropGameDefinitionOptionalFields(projection *ContextProjection) bool {
+	minimal := minimalGameDefinition(projection.GameDefinition)
+	if gameDefinitionsEqual(projection.GameDefinition, minimal) {
+		return false
+	}
+	projection.GameDefinition = minimal
+	return true
+}
+
+func dropAgentDefinitionOptionalFields(projection *ContextProjection) bool {
+	minimal := minimalAgentDefinition(projection.AgentDefinition)
+	if agentDefinitionsEqual(projection.AgentDefinition, minimal) {
+		return false
+	}
+	projection.AgentDefinition = minimal
+	return true
+}
+
+func firstError(existing error, candidate error) error {
+	if existing != nil {
+		return existing
+	}
+	return candidate
 }
 
 type definitionBudgetCrop struct {

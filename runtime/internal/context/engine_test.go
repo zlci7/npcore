@@ -812,6 +812,33 @@ func TestEngineBuildReportsMemoryBudgetWithoutDroppingRequiredProjection(t *test
 	}
 }
 
+func TestEngineBuildDropsNewestMemoryWhenItExceedsMemoryBudget(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxRecentMemoryBytes: 80})
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{{
+		MemoryID: "oversized-newest",
+		SourceContextFacts: []memory.SourceContextFact{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          strings.Repeat("memory-secret", 40),
+		}},
+	}}
+
+	result, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if len(result.Projection.RecentMemory) != 0 {
+		t.Fatalf("RecentMemory = %+v, want oversized optional memory dropped", result.Projection.RecentMemory)
+	}
+	if result.Report.RecentMemory.RetainedCount != 0 || result.Report.RecentMemory.DroppedCount != 1 {
+		t.Fatalf("RecentMemory report = %+v, want one dropped memory", result.Report.RecentMemory)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonMemoryBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want memory budget reason", result.Report.ReasonCodes)
+	}
+}
+
 func TestEngineBuildAppliesSharedDefinitionBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionBytes: 260})
 	input := validEngineInput(t)
@@ -864,6 +891,100 @@ func TestEngineBuildAppliesSharedDefinitionBudget(t *testing.T) {
 	}
 }
 
+func TestEngineBuildGloballyTrimsOptionalContextToFitRequestBudget(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestBytes:          2400,
+		MaxUserMessageBytes:      2200,
+		MaxDefinitionBytes:       4096,
+		MaxObservationBytes:      4096,
+		MaxEventBytes:            4096,
+		MaxContextFactsBytes:     4096,
+		MaxRecentMemoryBytes:     4096,
+		MaxTranscriptBytes:       4096,
+		MaxToolResultOutputBytes: 4096,
+	})
+	input := validEngineInput(t)
+	input.AgentDefinition.Identity = "agent-core"
+	input.Event.Payload = mustStruct(t, map[string]any{"dialogue_id": "intro"})
+	input.Observation.State = mustStruct(t, map[string]any{"weather": "rain"})
+	input.RecentMemories = []memory.Record{{
+		MemoryID: "oversized-memory",
+		SourceContextFacts: []memory.SourceContextFact{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          strings.Repeat("memory-secret", 120),
+		}},
+	}}
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_old",
+				Name:      "inspect",
+				Arguments: map[string]any{"query": strings.Repeat("old-transcript-secret", 80)},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_old",
+				Name:       "inspect",
+				Status:     "succeeded",
+				Code:       "action_succeeded",
+				Output:     map[string]any{"result": strings.Repeat("old-output-secret", 80)},
+			}},
+		},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_latest",
+				Name:      "inspect",
+				Arguments: map[string]any{"query": "latest"},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_latest",
+				Name:       "inspect",
+				Status:     "succeeded",
+				Code:       "action_succeeded",
+				Output:     map[string]any{"result": "ok"},
+			}},
+		},
+	}
+
+	result, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	req, err := agentcontext.NewRenderer().Render(result.Projection)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	size := agentcontext.MeasureRequest(req)
+	if agentcontext.RequestSizeExceedsBudget(size, result.Report.EffectiveBudget) {
+		t.Fatalf("rendered request still exceeds budget: size=%+v budget=%+v\n%s", size, result.Report.EffectiveBudget, req.Messages[0].Content)
+	}
+	content := renderRequestText(req)
+	assertStringContainsAll(t, content, "agent-core", "call_latest")
+	for _, leaked := range []string{"memory-secret", "old-transcript-secret", "old-output-secret"} {
+		if strings.Contains(content, leaked) {
+			t.Fatalf("globally trimmed request leaked %q:\n%s", leaked, content)
+		}
+	}
+	if len(result.Projection.RecentMemory) != 0 {
+		t.Fatalf("RecentMemory = %+v, want dropped under global pressure", result.Projection.RecentMemory)
+	}
+	if got, want := len(result.Projection.CurrentTurnTranscript), 2; got != want {
+		t.Fatalf("CurrentTurnTranscript length = %d, want latest causal group", got)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonMemoryBudgetExceeded) ||
+		!reportHasReason(result.Report, agentcontext.ReasonTranscriptBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want memory and transcript budget reasons", result.Report.ReasonCodes)
+	}
+}
+
 func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionBytes: 1})
 	input := validEngineInput(t)
@@ -881,9 +1002,9 @@ func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T
 
 func TestEngineBuildCropsStructuredSectionsWithoutInvalidJSON(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxEventBytes:            96,
-		MaxObservationBytes:      96,
-		MaxContextFactsBytes:     128,
+		MaxEventBytes:            512,
+		MaxObservationBytes:      256,
+		MaxContextFactsBytes:     256,
 		MaxToolResultOutputBytes: 256,
 	})
 	input := validEngineInput(t)
@@ -935,6 +1056,58 @@ func TestEngineBuildCropsStructuredSectionsWithoutInvalidJSON(t *testing.T) {
 	}
 	if !strings.Contains(fact.Text, "_truncated") {
 		t.Fatalf("fact text = %q, want truncation marker", fact.Text)
+	}
+}
+
+func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(t *testing.T) {
+	baselineInput := validEngineInput(t)
+	baselineInput.Event.Payload = nil
+	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(baselineInput)
+	if err != nil {
+		t.Fatalf("baseline Build returned error: %v", err)
+	}
+	eventShellBytes := reportSectionProxyBytes(t, baseline.Report, "current_event")
+
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventBytes: eventShellBytes})
+	input := validEngineInput(t)
+	input.Event.Payload = mustStruct(t, map[string]any{
+		"large": strings.Repeat("event-secret", 40),
+	})
+
+	result, err := engine.Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if len(result.Projection.CurrentEvent.Payload) != 0 {
+		t.Fatalf("CurrentEvent.Payload = %+v, want dropped optional payload", result.Projection.CurrentEvent.Payload)
+	}
+	if got := reportSectionProxyBytes(t, result.Report, "current_event"); got > eventShellBytes {
+		t.Fatalf("current_event proxy bytes = %d, want <= %d", got, eventShellBytes)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonEventBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want event budget reason", result.Report.ReasonCodes)
+	}
+	if reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) ||
+		reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want no required over-budget reasons", result.Report.ReasonCodes)
+	}
+}
+
+func TestEngineBuildFailsWhenRequiredEventShellExceedsSectionBudget(t *testing.T) {
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventBytes: 1})
+	input := validEngineInput(t)
+	input.Event.Payload = mustStruct(t, map[string]any{
+		"large": strings.Repeat("event-secret", 40),
+	})
+
+	result, err := engine.Build(input)
+	if !errors.Is(err, agentcontext.ErrBudgetExceeded) {
+		t.Fatalf("Build error = %v, want ErrBudgetExceeded", err)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonEventBudgetExceeded) ||
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) ||
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want event and required section budget reasons", result.Report.ReasonCodes)
 	}
 }
 
@@ -1056,6 +1229,80 @@ func TestEngineBuildRejectsIncompleteTranscriptToolCallGroup(t *testing.T) {
 	assertInvalidInputError(t, err, "transcript tool call has no corresponding result")
 }
 
+func TestEngineBuildRejectsTranscriptDuplicateResultIDs(t *testing.T) {
+	input := validEngineInput(t)
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_a", Name: "inspect", Arguments: map[string]any{"query": "a"}},
+				{ID: "call_b", Name: "inspect", Arguments: map[string]any{"query": "b"}},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{
+				{ToolCallID: "call_a", Name: "inspect", Status: "succeeded"},
+				{ToolCallID: "call_a", Name: "inspect", Status: "succeeded"},
+			},
+		},
+	}
+
+	_, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(input)
+	assertInvalidInputError(t, err, "transcript tool call has no corresponding result")
+}
+
+func TestEngineBuildRejectsTranscriptDuplicateCallIDs(t *testing.T) {
+	input := validEngineInput(t)
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_a", Name: "inspect", Arguments: map[string]any{"query": "a"}},
+				{ID: "call_a", Name: "inspect", Arguments: map[string]any{"query": "again"}},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{
+				{ToolCallID: "call_a", Name: "inspect", Status: "succeeded"},
+				{ToolCallID: "call_a", Name: "inspect", Status: "rejected"},
+			},
+		},
+	}
+
+	_, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(input)
+	assertInvalidInputError(t, err, "transcript tool call has no corresponding result")
+}
+
+func TestEngineBuildAcceptsTranscriptResultsMatchedByIDOutOfOrder(t *testing.T) {
+	input := validEngineInput(t)
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_a", Name: "inspect", Arguments: map[string]any{"query": "a"}},
+				{ID: "call_b", Name: "inspect", Arguments: map[string]any{"query": "b"}},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{
+				{ToolCallID: "call_b", Name: "inspect", Status: "succeeded"},
+				{ToolCallID: "call_a", Name: "inspect", Status: "succeeded"},
+			},
+		},
+	}
+
+	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got, want := len(result.Projection.CurrentTurnTranscript), 2; got != want {
+		t.Fatalf("CurrentTurnTranscript length = %d, want %d", got, want)
+	}
+}
+
 func TestMeasureRequestIsDeterministicForFixedRequest(t *testing.T) {
 	req := model.Request{
 		System: "policy",
@@ -1175,6 +1422,14 @@ func assertStringContainsAll(t *testing.T, content string, values ...string) {
 	}
 }
 
+func renderRequestText(req model.Request) string {
+	parts := []string{req.System}
+	for _, message := range req.Messages {
+		parts = append(parts, message.Content)
+	}
+	return strings.Join(parts, "\n")
+}
+
 func reportHasReason(report agentcontext.ContextBuildReport, reason string) bool {
 	for _, code := range report.ReasonCodes {
 		if code == reason {
@@ -1182,6 +1437,18 @@ func reportHasReason(report agentcontext.ContextBuildReport, reason string) bool
 		}
 	}
 	return false
+}
+
+func reportSectionProxyBytes(t *testing.T, report agentcontext.ContextBuildReport, name string) int {
+	t.Helper()
+
+	for _, section := range report.Sections {
+		if section.Name == name {
+			return section.ProxyBytes
+		}
+	}
+	t.Fatalf("section %q not found in %+v", name, report.Sections)
+	return 0
 }
 
 func mustMarshalProjectionJSON(t *testing.T, value any) []byte {

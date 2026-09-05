@@ -75,17 +75,30 @@ func toolResultsMatchCalls(calls []model.ToolCall, results []model.ToolResult) b
 	}
 	seen := make(map[string]struct{}, len(calls))
 	for _, call := range calls {
-		if strings.TrimSpace(call.ID) == "" {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
 			return false
 		}
-		seen[call.ID] = struct{}{}
+		if _, ok := seen[id]; ok {
+			return false
+		}
+		seen[id] = struct{}{}
 	}
+	matched := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		if _, ok := seen[result.ToolCallID]; !ok {
+		id := strings.TrimSpace(result.ToolCallID)
+		if id == "" {
 			return false
 		}
+		if _, ok := matched[id]; ok {
+			return false
+		}
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+		matched[id] = struct{}{}
 	}
-	return true
+	return len(matched) == len(seen)
 }
 
 func trimTranscriptGroups(groups []transcriptCausalGroup, limit int) ([]model.Message, int, error) {

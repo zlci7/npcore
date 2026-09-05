@@ -59,7 +59,10 @@ func RequestSizeExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) b
 }
 
 func RequiredRequestSectionExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) bool {
-	return budget.MaxSystemBytes > 0 && summary.SystemBytes > budget.MaxSystemBytes
+	if budget.MaxSystemBytes > 0 && summary.SystemBytes > budget.MaxSystemBytes {
+		return true
+	}
+	return budget.MaxUserMessageBytes > 0 && summary.UserMessageBytes > budget.MaxUserMessageBytes
 }
 
 func RequestSizeBudgetError(summary RequestSizeSummary, budget BudgetConfig) error {
@@ -77,13 +80,28 @@ func RequestSizeBudgetError(summary RequestSizeSummary, budget BudgetConfig) err
 
 func ToolAdmissionSummaryFromReport(report tool.ToolAdmissionReport) ToolAdmissionSummary {
 	return ToolAdmissionSummary{
-		AcceptedToolCount: report.AcceptedToolCount,
-		AcceptedToolNames: append([]string(nil), report.AcceptedToolNames...),
-		DroppedToolCount:  report.DroppedToolCount,
-		DroppedToolNames:  append([]string(nil), report.DroppedToolNames...),
-		DroppedTools:      append([]tool.ToolAdmissionDrop(nil), report.DroppedTools...),
-		TotalSchemaBytes:  report.TotalSchemaBytes,
+		AcceptedToolCount:               report.AcceptedToolCount,
+		AcceptedToolNames:               append([]string(nil), report.AcceptedToolNames...),
+		AcceptedToolNamesTruncatedCount: report.AcceptedToolNamesTruncatedCount,
+		DroppedToolCount:                report.DroppedToolCount,
+		DroppedToolNames:                append([]string(nil), report.DroppedToolNames...),
+		DroppedToolNamesTruncatedCount:  report.DroppedToolNamesTruncatedCount,
+		DroppedTools:                    append([]tool.ToolAdmissionDrop(nil), report.DroppedTools...),
+		DroppedToolsTruncatedCount:      report.DroppedToolsTruncatedCount,
+		DroppedReasonCounts:             copyStringIntMap(report.DroppedReasonCounts),
+		TotalSchemaBytes:                report.TotalSchemaBytes,
 	}
+}
+
+func copyStringIntMap(values map[string]int) map[string]int {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]int, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func (r ContextBuildReport) WithToolAdmission(summary ToolAdmissionSummary) ContextBuildReport {

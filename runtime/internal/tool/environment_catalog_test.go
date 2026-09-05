@@ -2,6 +2,7 @@ package tool
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -413,6 +414,68 @@ func TestBuildTurnToolViewAppliesTotalSchemaGreedyAdmission(t *testing.T) {
 	assertToolAdmissionDrops(t, result.Report, []ToolAdmissionDrop{
 		{Name: "gamma", Reason: ToolDropReasonTotalSchemaBudgetExceeded},
 	})
+}
+
+func TestBuildTurnToolViewBoundsAdmissionDiagnostics(t *testing.T) {
+	capabilities := make([]*protocolv1alpha2.Capability, 0, 25)
+	for i := 0; i < 25; i++ {
+		capabilities = append(capabilities, capability(fmt.Sprintf("tool_%02d", i), "short", `{"type":"object"}`))
+	}
+	catalog := mustEnvironmentCatalog(t, capabilities...)
+
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:            1,
+		MaxToolDescriptionBytes: 64,
+		MaxToolSchemaBytes:      64,
+		MaxTotalToolSchemaBytes: 1024,
+	})
+
+	if result.Report.DroppedToolCount != 24 {
+		t.Fatalf("DroppedToolCount = %d, want 24", result.Report.DroppedToolCount)
+	}
+	if len(result.Report.DroppedToolNames) != MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("DroppedToolNames length = %d, want %d", len(result.Report.DroppedToolNames), MaxToolAdmissionDiagnosticNames)
+	}
+	if result.Report.DroppedToolNamesTruncatedCount != 24-MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("DroppedToolNamesTruncatedCount = %d, want %d", result.Report.DroppedToolNamesTruncatedCount, 24-MaxToolAdmissionDiagnosticNames)
+	}
+	if len(result.Report.DroppedTools) != MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("DroppedTools length = %d, want %d", len(result.Report.DroppedTools), MaxToolAdmissionDiagnosticNames)
+	}
+	if result.Report.DroppedToolsTruncatedCount != 24-MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("DroppedToolsTruncatedCount = %d, want %d", result.Report.DroppedToolsTruncatedCount, 24-MaxToolAdmissionDiagnosticNames)
+	}
+	if got := result.Report.DroppedReasonCounts[ToolDropReasonCountExceeded]; got != 24 {
+		t.Fatalf("DroppedReasonCounts[%s] = %d, want 24", ToolDropReasonCountExceeded, got)
+	}
+}
+
+func TestBuildTurnToolViewBoundsAcceptedDiagnostics(t *testing.T) {
+	capabilities := make([]*protocolv1alpha2.Capability, 0, 20)
+	for i := 0; i < 20; i++ {
+		capabilities = append(capabilities, capability(fmt.Sprintf("tool_%02d", i), "short", `{"type":"object"}`))
+	}
+	catalog := mustEnvironmentCatalog(t, capabilities...)
+
+	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
+		MaxToolCount:            32,
+		MaxToolDescriptionBytes: 64,
+		MaxToolSchemaBytes:      64,
+		MaxTotalToolSchemaBytes: 2048,
+	})
+
+	if result.Report.AcceptedToolCount != 20 {
+		t.Fatalf("AcceptedToolCount = %d, want 20", result.Report.AcceptedToolCount)
+	}
+	if len(result.Report.AcceptedToolNames) != MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("AcceptedToolNames length = %d, want %d", len(result.Report.AcceptedToolNames), MaxToolAdmissionDiagnosticNames)
+	}
+	if result.Report.AcceptedToolNamesTruncatedCount != 20-MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("AcceptedToolNamesTruncatedCount = %d, want %d", result.Report.AcceptedToolNamesTruncatedCount, 20-MaxToolAdmissionDiagnosticNames)
+	}
+	if got, want := len(result.View.Available()), 20; got != want {
+		t.Fatalf("admitted tool count = %d, want %d", got, want)
+	}
 }
 
 func invalidToolPolicyExtensions(t *testing.T) *structpb.Struct {

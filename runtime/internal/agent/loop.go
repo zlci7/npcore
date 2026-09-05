@@ -202,11 +202,14 @@ func (l *Loop) HandleEvent(
 	}, turnID)
 	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{
 		Fields: trace.Fields{
-			"turn_tool_count":         len(tools),
-			"turn_tool_names":         toolDefinitionNames(tools),
-			"dropped_tool_count":      toolAdmission.Report.DroppedToolCount,
-			"dropped_tool_names":      append([]string(nil), toolAdmission.Report.DroppedToolNames...),
-			"tool_schema_total_bytes": toolAdmission.Report.TotalSchemaBytes,
+			"turn_tool_count":                    len(tools),
+			"turn_tool_names":                    append([]string(nil), toolAdmission.Report.AcceptedToolNames...),
+			"turn_tool_names_truncated_count":    toolAdmission.Report.AcceptedToolNamesTruncatedCount,
+			"dropped_tool_count":                 toolAdmission.Report.DroppedToolCount,
+			"dropped_tool_names":                 append([]string(nil), toolAdmission.Report.DroppedToolNames...),
+			"dropped_tool_names_truncated_count": toolAdmission.Report.DroppedToolNamesTruncatedCount,
+			"dropped_tool_reason_counts":         copyStringIntMap(toolAdmission.Report.DroppedReasonCounts),
+			"tool_schema_total_bytes":            toolAdmission.Report.TotalSchemaBytes,
 		},
 	})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
@@ -728,14 +731,6 @@ func (l *Loop) concurrencyModesForCalls(calls []model.ToolCall, toolView tool.Tu
 	return modes
 }
 
-func toolDefinitionNames(tools []model.ToolDefinition) []string {
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		names = append(names, tool.Name)
-	}
-	return names
-}
-
 func toolResultCallIDs(results []model.ToolResult) []string {
 	ids := make([]string, 0, len(results))
 	for _, result := range results {
@@ -804,25 +799,39 @@ func (l *Loop) toolAdmissionConfig() tool.ToolAdmissionConfig {
 
 func contextBuildTraceFields(stepIndex int, report agentcontext.ContextBuildReport) trace.Fields {
 	fields := trace.Fields{
-		"step_index":                 stepIndex,
-		"reason_codes":               append([]string(nil), report.ReasonCodes...),
-		"recent_memory_retained":     report.RecentMemory.RetainedCount,
-		"recent_memory_dropped":      report.RecentMemory.DroppedCount,
-		"transcript_retained":        report.Transcript.RetainedCount,
-		"transcript_dropped":         report.Transcript.DroppedCount,
-		"accepted_tool_count":        report.ToolAdmission.AcceptedToolCount,
-		"accepted_tool_names":        append([]string(nil), report.ToolAdmission.AcceptedToolNames...),
-		"dropped_tool_count":         report.ToolAdmission.DroppedToolCount,
-		"dropped_tool_names":         append([]string(nil), report.ToolAdmission.DroppedToolNames...),
-		"tool_schema_total_bytes":    report.ToolAdmission.TotalSchemaBytes,
-		"request_total_bytes":        report.FinalRequestSize.TotalBytes,
-		"request_system_bytes":       report.FinalRequestSize.SystemBytes,
-		"request_messages_bytes":     report.FinalRequestSize.MessagesBytes,
-		"request_user_message_bytes": report.FinalRequestSize.UserMessageBytes,
-		"request_tools_bytes":        report.FinalRequestSize.ToolsBytes,
-		"request_controls_bytes":     report.FinalRequestSize.ControlsBytes,
+		"step_index":                          stepIndex,
+		"reason_codes":                        append([]string(nil), report.ReasonCodes...),
+		"recent_memory_retained":              report.RecentMemory.RetainedCount,
+		"recent_memory_dropped":               report.RecentMemory.DroppedCount,
+		"transcript_retained":                 report.Transcript.RetainedCount,
+		"transcript_dropped":                  report.Transcript.DroppedCount,
+		"accepted_tool_count":                 report.ToolAdmission.AcceptedToolCount,
+		"accepted_tool_names":                 append([]string(nil), report.ToolAdmission.AcceptedToolNames...),
+		"accepted_tool_names_truncated_count": report.ToolAdmission.AcceptedToolNamesTruncatedCount,
+		"dropped_tool_count":                  report.ToolAdmission.DroppedToolCount,
+		"dropped_tool_names":                  append([]string(nil), report.ToolAdmission.DroppedToolNames...),
+		"dropped_tool_names_truncated_count":  report.ToolAdmission.DroppedToolNamesTruncatedCount,
+		"dropped_tool_reason_counts":          copyStringIntMap(report.ToolAdmission.DroppedReasonCounts),
+		"tool_schema_total_bytes":             report.ToolAdmission.TotalSchemaBytes,
+		"request_total_bytes":                 report.FinalRequestSize.TotalBytes,
+		"request_system_bytes":                report.FinalRequestSize.SystemBytes,
+		"request_messages_bytes":              report.FinalRequestSize.MessagesBytes,
+		"request_user_message_bytes":          report.FinalRequestSize.UserMessageBytes,
+		"request_tools_bytes":                 report.FinalRequestSize.ToolsBytes,
+		"request_controls_bytes":              report.FinalRequestSize.ControlsBytes,
 	}
 	return fields
+}
+
+func copyStringIntMap(values map[string]int) map[string]int {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]int, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func contextFailureReason(err error) string {

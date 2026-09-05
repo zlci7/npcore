@@ -607,6 +607,47 @@ func TestHandleEventAppliesToolAdmissionToModelRequestAndScheduler(t *testing.T)
 	assertTraceContains(t, recorder.events, trace.EventContextRequestBuilt)
 }
 
+func TestHandleEventEmitsBoundedToolAdmissionTraceSummary(t *testing.T) {
+	capabilities := make([]*protocolv1alpha2.Capability, 0, 25)
+	for i := 0; i < 25; i++ {
+		capabilities = append(capabilities, &protocolv1alpha2.Capability{
+			Name:            fmt.Sprintf("tool_%02d", i),
+			Description:     "short",
+			InputSchemaJson: `{"type":"object"}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		})
+	}
+	catalog := mustEnvironmentToolCatalog(t, capabilities)
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{response: model.Response{
+		Decision: model.ModelDecision{
+			Control: model.ControlDirective{Kind: model.ControlSettle},
+		},
+	}}
+	config := agent.DefaultConfig()
+	config.MaxToolCount = 1
+	loop := agent.NewLoop(provider, recorder, config)
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, entityTarget(key), catalog, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	started := traceEventsByName(recorder.events, trace.EventTurnStarted)
+	if len(started) != 1 {
+		t.Fatalf("turn_started event count = %d, want 1", len(started))
+	}
+	assertTraceToolAdmissionSummary(t, started[0].Fields, 24)
+
+	built := traceEventsByName(recorder.events, trace.EventContextRequestBuilt)
+	if len(built) != 1 {
+		t.Fatalf("context_request_built event count = %d, want 1", len(built))
+	}
+	assertTraceToolAdmissionSummary(t, built[0].Fields, 24)
+}
+
 func TestHandleEventFailsBeforeProviderWhenRequestHardLimitExceeded(t *testing.T) {
 	catalog := newSpeakRegistry()
 	env := &fakeEnvironment{}
@@ -1056,6 +1097,32 @@ func assertContextBuildFailedReasons(t *testing.T, events []trace.Event, want []
 		return
 	}
 	t.Fatalf("trace missing event %q; got %+v", trace.EventContextRequestBuildFailed, events)
+}
+
+func assertTraceToolAdmissionSummary(t *testing.T, fields trace.Fields, droppedCount int) {
+	t.Helper()
+
+	names, ok := fields["dropped_tool_names"].([]string)
+	if !ok {
+		t.Fatalf("dropped_tool_names = %#v, want []string", fields["dropped_tool_names"])
+	}
+	if len(names) != tool.MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("dropped_tool_names length = %d, want %d", len(names), tool.MaxToolAdmissionDiagnosticNames)
+	}
+	truncated, ok := fields["dropped_tool_names_truncated_count"].(int)
+	if !ok {
+		t.Fatalf("dropped_tool_names_truncated_count = %#v, want int", fields["dropped_tool_names_truncated_count"])
+	}
+	if truncated != droppedCount-tool.MaxToolAdmissionDiagnosticNames {
+		t.Fatalf("dropped_tool_names_truncated_count = %d, want %d", truncated, droppedCount-tool.MaxToolAdmissionDiagnosticNames)
+	}
+	reasons, ok := fields["dropped_tool_reason_counts"].(map[string]int)
+	if !ok {
+		t.Fatalf("dropped_tool_reason_counts = %#v, want map[string]int", fields["dropped_tool_reason_counts"])
+	}
+	if reasons[tool.ToolDropReasonCountExceeded] != droppedCount {
+		t.Fatalf("dropped_tool_reason_counts[%s] = %d, want %d", tool.ToolDropReasonCountExceeded, reasons[tool.ToolDropReasonCountExceeded], droppedCount)
+	}
 }
 
 func stringSliceContains(values []string, want string) bool {

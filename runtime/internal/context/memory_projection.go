@@ -92,6 +92,9 @@ func trimMemoryProjections(projections []MemoryProjection, limit int) []MemoryPr
 
 	start := len(projections) - 1
 	rendered := renderMemoryProjection(projections[start])
+	if len([]byte(rendered)) > limit {
+		return nil
+	}
 	for start > 0 {
 		next := renderMemoryProjection(projections[start-1])
 		if len([]byte(next+"\n"+rendered)) > limit {
