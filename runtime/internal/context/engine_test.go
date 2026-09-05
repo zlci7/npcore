@@ -13,6 +13,7 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+	"gameagent/runtime/internal/tokenestimate"
 	"gameagent/runtime/internal/tool"
 )
 
@@ -85,7 +86,7 @@ func TestEngineBuildReturnsReportWithEffectiveBudget(t *testing.T) {
 
 	budget := result.Report.EffectiveBudget
 	if budget.MaxRecentMemoryTokens != 123 {
-		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy MemoryContextSizeLimit mapping to 123", budget.MaxRecentMemoryTokens)
+		t.Fatalf("MaxRecentMemoryTokens = %d, want configured token budget 123", budget.MaxRecentMemoryTokens)
 	}
 	if budget.MaxRequestTokens != 4096 ||
 		budget.MaxSystemTokens != 512 ||
@@ -1158,6 +1159,78 @@ func TestEngineBuildTrimsOlderTranscriptBeforeRecentMemoryUnderGlobalBudget(t *t
 	}
 }
 
+func TestEngineBuildDropsOnlyOldestTranscriptGroupWhenThatFitsGlobalBudget(t *testing.T) {
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{{
+		MemoryID: "memory-keep",
+		SourceContextFacts: []memory.SourceContextFact{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          "keep this memory",
+		}},
+	}}
+	input.Transcript = []model.Message{
+		transcriptCallMessage("call_oldest", strings.Repeat("oldest-transcript", 35)),
+		transcriptResultMessage("call_oldest", strings.Repeat("oldest-output", 35)),
+		transcriptCallMessage("call_middle", strings.Repeat("middle-transcript", 20)),
+		transcriptResultMessage("call_middle", strings.Repeat("middle-output", 20)),
+		transcriptCallMessage("call_latest", "latest"),
+		transcriptResultMessage("call_latest", "ok"),
+	}
+
+	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestTokens:          262144,
+		MaxUserMessageTokens:      262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("baseline Build returned error: %v", err)
+	}
+	fullSize := measureProjectionForTest(t, baseline.Projection)
+
+	withoutOldestGroup := baseline.Projection
+	withoutOldestGroup.CurrentTurnTranscript = baseline.Projection.CurrentTurnTranscript[2:]
+	afterOneTranscriptGroupDrop := measureProjectionForTest(t, withoutOldestGroup)
+	if afterOneTranscriptGroupDrop.TotalEstimatedTokens >= fullSize.TotalEstimatedTokens {
+		t.Fatalf("test setup did not create transcript pressure: full=%+v after_one_drop=%+v", fullSize, afterOneTranscriptGroupDrop)
+	}
+
+	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestTokens:          afterOneTranscriptGroupDrop.TotalEstimatedTokens,
+		MaxUserMessageTokens:      262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got, want := len(result.Projection.RecentMemory), 1; got != want {
+		t.Fatalf("RecentMemory length = %d, want %d", got, want)
+	}
+	if got, want := len(result.Projection.CurrentTurnTranscript), 4; got != want {
+		t.Fatalf("CurrentTurnTranscript length = %d, want middle and latest groups", got)
+	}
+	retainedIDs := []string{
+		result.Projection.CurrentTurnTranscript[0].ToolCalls[0].ID,
+		result.Projection.CurrentTurnTranscript[2].ToolCalls[0].ID,
+	}
+	if want := []string{"call_middle", "call_latest"}; !reflect.DeepEqual(retainedIDs, want) {
+		t.Fatalf("retained transcript IDs = %v, want %v", retainedIDs, want)
+	}
+	if result.Report.Transcript.DroppedCount != 2 || result.Report.Transcript.RetainedCount != 4 {
+		t.Fatalf("Transcript report = %+v, want one dropped group and two retained groups", result.Report.Transcript)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonTranscriptBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want transcript budget reason", result.Report.ReasonCodes)
+	}
+	if reportHasReason(result.Report, agentcontext.ReasonMemoryBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want memory untouched", result.Report.ReasonCodes)
+	}
+}
+
 func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionTokens: 1})
 	input := validEngineInput(t)
@@ -1229,8 +1302,46 @@ func TestEngineBuildCropsStructuredSectionsWithoutInvalidJSON(t *testing.T) {
 		fact.Label != "greeting" {
 		t.Fatalf("fact identity = %+v, want identity fields preserved", fact)
 	}
-	if !strings.Contains(fact.Text, "_truncated") {
-		t.Fatalf("fact text = %q, want truncation marker", fact.Text)
+	if fact.Text != "_truncated" {
+		t.Fatalf("fact text = %q, want short truncation marker", fact.Text)
+	}
+}
+
+func TestEngineBuildFailsWhenContextFactIdentityAndMarkerExceedSectionBudget(t *testing.T) {
+	input := validEngineInput(t)
+	input.Event.ContextFacts = []*protocolv1alpha2.ContextFact{{
+		Kind:           "utterance",
+		ActorEntityId:  "player:local",
+		TargetEntityId: "npc:Abigail",
+		ScopeId:        "conversation:1",
+		Label:          "greeting",
+		Text:           strings.Repeat("fact-secret", 40),
+	}}
+	markerProjection := agentcontext.ContextProjection{
+		CurrentEventContextFacts: []agentcontext.ContextFactProjection{{
+			Kind:           "utterance",
+			ActorEntityID:  "player:local",
+			TargetEntityID: "npc:Abigail",
+			ScopeID:        "conversation:1",
+			Label:          "greeting",
+			Text:           "_truncated",
+		}},
+	}
+	requiredMarkerTokens, err := tokenestimate.EstimateStableJSON(markerProjection.CurrentEventContextFacts)
+	if err != nil {
+		t.Fatalf("EstimateStableJSON returned error: %v", err)
+	}
+	requiredMarkerTokens--
+	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxContextFactsTokens: requiredMarkerTokens,
+	}).Build(input)
+	if !errors.Is(err, agentcontext.ErrBudgetExceeded) {
+		t.Fatalf("Build error = %v, want ErrBudgetExceeded", err)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonContextFactsBudgetExceeded) ||
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) ||
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want context facts required-section budget reasons", result.Report.ReasonCodes)
 	}
 }
 
@@ -1625,6 +1736,30 @@ func estimateRequestTokensForTest(t *testing.T, req model.Request) agentcontext.
 		t.Fatalf("EstimateRequestTokens returned error: %v", err)
 	}
 	return size
+}
+
+func transcriptCallMessage(callID string, query string) model.Message {
+	return model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID:        callID,
+			Name:      "inspect",
+			Arguments: map[string]any{"query": query},
+		}},
+	}
+}
+
+func transcriptResultMessage(callID string, result string) model.Message {
+	return model.Message{
+		Role: model.RoleTool,
+		ToolResults: []model.ToolResult{{
+			ToolCallID: callID,
+			Name:       "inspect",
+			Status:     "succeeded",
+			Code:       "action_succeeded",
+			Output:     map[string]any{"result": result},
+		}},
+	}
 }
 
 func maxInt(left int, right int) int {

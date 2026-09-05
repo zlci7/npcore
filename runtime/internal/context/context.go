@@ -31,6 +31,8 @@ const (
 	ReasonDefinitionBudgetExceeded   = "definition_budget_exceeded"
 )
 
+const truncatedMarker = "_truncated"
+
 const defaultAuthorityInstruction = `Current Observation is the current truth.
 Recent Memory is historical context.
 If Recent Memory conflicts with Current Observation, follow Current Observation.
@@ -376,12 +378,7 @@ func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, r
 		sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
 	}
 	if budget.MaxContextFactsTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentEventContextFacts) > budget.MaxContextFactsTokens {
-		for i := range projection.CurrentEventContextFacts {
-			if projection.CurrentEventContextFacts[i].Text != "" {
-				projection.CurrentEventContextFacts[i].Text = "_truncated: context fact text exceeded token limit"
-			}
-			projection.CurrentEventContextFacts[i].Attributes = nil
-		}
+		dropContextFactOptionalFields(&projection)
 		report.addReason(ReasonContextFactsBudgetExceeded)
 		sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
 	}
@@ -458,7 +455,7 @@ func enforceGlobalRequestBudget(projection ContextProjection, budget BudgetConfi
 			return projection, report, nil
 		}
 		switch {
-		case trimTranscriptToLatestGroup(&projection, &report):
+		case dropOldestTranscriptGroup(&projection, &report):
 			report.addReason(ReasonTranscriptBudgetExceeded)
 			sectionCropped["current_turn_transcript"] = ReasonTranscriptBudgetExceeded
 		case dropOldestRecentMemory(&projection):
@@ -519,29 +516,27 @@ func dropOldestRecentMemory(projection *ContextProjection) bool {
 	return true
 }
 
-func trimTranscriptToLatestGroup(projection *ContextProjection, report *ContextBuildReport) bool {
+func dropOldestTranscriptGroup(projection *ContextProjection, report *ContextBuildReport) bool {
 	if len(projection.CurrentTurnTranscript) == 0 {
 		return false
 	}
 	groups, err := transcriptCausalGroups(projection.CurrentTurnTranscript)
-	if err != nil || len(groups) == 0 {
+	if err != nil || len(groups) <= 1 {
 		return false
 	}
-	latest := flattenTranscriptGroups(groups[len(groups)-1:])
-	if len(latest) == len(projection.CurrentTurnTranscript) {
-		return false
-	}
-	report.Transcript.DroppedCount += len(projection.CurrentTurnTranscript) - len(latest)
-	report.Transcript.RetainedCount = len(latest)
-	projection.CurrentTurnTranscript = latest
+	dropped := len(groups[0].messages)
+	retained := flattenTranscriptGroups(groups[1:])
+	report.Transcript.DroppedCount += dropped
+	report.Transcript.RetainedCount = len(retained)
+	projection.CurrentTurnTranscript = retained
 	return true
 }
 
 func dropContextFactOptionalFields(projection *ContextProjection) bool {
 	changed := false
 	for i := range projection.CurrentEventContextFacts {
-		if projection.CurrentEventContextFacts[i].Text != "" {
-			projection.CurrentEventContextFacts[i].Text = ""
+		if projection.CurrentEventContextFacts[i].Text != "" && projection.CurrentEventContextFacts[i].Text != truncatedMarker {
+			projection.CurrentEventContextFacts[i].Text = truncatedMarker
 			changed = true
 		}
 		if len(projection.CurrentEventContextFacts[i].Attributes) > 0 {
