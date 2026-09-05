@@ -64,7 +64,7 @@ func TestEngineBuildCreatesContextProjectionFromValidatedInput(t *testing.T) {
 
 func TestEngineBuildReturnsReportWithEffectiveBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MemoryContextSizeLimit:    123,
+		MaxRecentMemoryTokens:     123,
 		MaxRequestTokens:          4096,
 		MaxSystemTokens:           512,
 		MaxUserMessageTokens:      2048,
@@ -551,7 +551,7 @@ func TestEngineBuildDoesNotInferContextFactsFromPayloadOrObservationState(t *tes
 }
 
 func TestEngineBuildProjectsRecentMemorySelection(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.EngineConfig{MemoryContextSizeLimit: 4096})
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{MaxRecentMemoryTokens: 4096})
 	input := validEngineInput(t)
 	input.Event.GameTime = &protocolv1alpha2.GameTime{
 		Year:   ptrInt32(1),
@@ -647,7 +647,7 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 		t.Fatalf("latest-only Build returned error: %v", err)
 	}
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MemoryContextSizeLimit: reportSectionProjectionEstimatedTokens(t, latestOnly.Report, "recent_memory"),
+		MaxRecentMemoryTokens: reportSectionProjectionEstimatedTokens(t, latestOnly.Report, "recent_memory"),
 	})
 
 	result, err := engine.Build(input)
@@ -666,7 +666,7 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 
 func TestEngineBuildProjectsBoundedRecentMemoryToolArguments(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MemoryContextSizeLimit:        4096,
+		MaxRecentMemoryTokens:         4096,
 		MaxToolResultOutputTokens:     300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,

@@ -115,7 +115,6 @@ func NewLoop(modelProvider model.Provider, recorder trace.Recorder, config Confi
 		memoryStore:     memory.NewInMemoryStoreWithMaxRecords(defaultMemoryStoreMaxRecords(config.RecentMemoryLimit)),
 		memoryProjector: memory.NewProjector(nil),
 		contextEngine: agentcontext.NewEngine(agentcontext.EngineConfig{
-			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
 			MaxRequestTokens:              config.MaxRequestTokens,
 			MaxSystemTokens:               config.MaxSystemTokens,
 			MaxUserMessageTokens:          config.MaxUserMessageTokens,

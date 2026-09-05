@@ -924,7 +924,7 @@ func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	provider := &recordingProvider{}
 	config := agent.DefaultConfig()
 	config.RecentMemoryLimit = 25
-	config.MemoryContextSizeLimit = 65536
+	config.MaxRecentMemoryTokens = 65536
 	config.MaxRecentMemoryTokens = 65536
 	config.MaxRequestTokens = 262144
 	config.MaxUserMessageTokens = 262144

@@ -802,7 +802,7 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
 	target := &protocolv1alpha2.EntityRef{EntityId: key.EntityID, DefinitionId: key.EntityID}
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MaxToolResultOutputTokens:      300,
+		MaxToolResultOutputTokens:     300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,
@@ -1051,7 +1051,7 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 7, Minute: 10},
 			},
 		},
-	}, agentcontext.EngineConfig{MemoryContextSizeLimit: 256})
+	}, agentcontext.EngineConfig{MaxRecentMemoryTokens: 256})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}

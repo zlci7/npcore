@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	agentcontext "gameagent/runtime/internal/context"
+	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -25,26 +27,25 @@ type Config struct {
 	AsyncActionTimeout            time.Duration
 	MemoryEnabled                 *bool
 	RecentMemoryLimit             int
-	MemoryContextSizeLimit        int
 	MaxSteps                      int
 	MaxToolCallsPerStep           int
 	MaxToolCallsPerTurn           int
 	MaxAsyncActionsPerTurn        int
 	MaxParallelToolCalls          int
-	MaxRequestTokens               int
-	MaxSystemTokens                int
-	MaxUserMessageTokens           int
-	MaxDefinitionTokens            int
-	MaxObservationTokens           int
-	MaxEventTokens                 int
-	MaxContextFactsTokens          int
-	MaxRecentMemoryTokens          int
-	MaxTranscriptTokens            int
+	MaxRequestTokens              int
+	MaxSystemTokens               int
+	MaxUserMessageTokens          int
+	MaxDefinitionTokens           int
+	MaxObservationTokens          int
+	MaxEventTokens                int
+	MaxContextFactsTokens         int
+	MaxRecentMemoryTokens         int
+	MaxTranscriptTokens           int
 	MaxToolCount                  int
-	MaxToolDescriptionTokens       int
-	MaxToolSchemaTokens            int
-	MaxTotalToolSchemaTokens       int
-	MaxToolResultOutputTokens      int
+	MaxToolDescriptionTokens      int
+	MaxToolSchemaTokens           int
+	MaxTotalToolSchemaTokens      int
+	MaxToolResultOutputTokens     int
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
 	MaxToolResultOutputArrayItems int
@@ -67,20 +68,33 @@ type fileConfig struct {
 	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
 	MaxAsyncActionsPerTurn        int          `json:"max_async_actions_per_turn"`
 	MaxParallelToolCalls          int          `json:"max_parallel_tool_calls"`
-	MaxRequestTokens               int          `json:"max_request_bytes"`
-	MaxSystemTokens                int          `json:"max_system_bytes"`
-	MaxUserMessageTokens           int          `json:"max_user_message_bytes"`
-	MaxDefinitionTokens            int          `json:"max_definition_bytes"`
-	MaxObservationTokens           int          `json:"max_observation_bytes"`
-	MaxEventTokens                 int          `json:"max_event_bytes"`
-	MaxContextFactsTokens          int          `json:"max_context_facts_bytes"`
-	MaxRecentMemoryTokens          int          `json:"max_recent_memory_bytes"`
-	MaxTranscriptTokens            int          `json:"max_transcript_bytes"`
+	MaxRequestTokens              int          `json:"max_request_tokens"`
+	MaxSystemTokens               int          `json:"max_system_tokens"`
+	MaxUserMessageTokens          int          `json:"max_user_message_tokens"`
+	MaxDefinitionTokens           int          `json:"max_definition_tokens"`
+	MaxObservationTokens          int          `json:"max_observation_tokens"`
+	MaxEventTokens                int          `json:"max_event_tokens"`
+	MaxContextFactsTokens         int          `json:"max_context_facts_tokens"`
+	MaxRecentMemoryTokens         int          `json:"max_recent_memory_tokens"`
+	MaxTranscriptTokens           int          `json:"max_transcript_tokens"`
 	MaxToolCount                  int          `json:"max_tool_count"`
-	MaxToolDescriptionTokens       int          `json:"max_tool_description_bytes"`
-	MaxToolSchemaTokens            int          `json:"max_tool_schema_bytes"`
-	MaxTotalToolSchemaTokens       int          `json:"max_total_tool_schema_bytes"`
-	MaxToolResultOutputTokens      int          `json:"max_tool_result_output_bytes"`
+	MaxToolDescriptionTokens      int          `json:"max_tool_description_tokens"`
+	MaxToolSchemaTokens           int          `json:"max_tool_schema_tokens"`
+	MaxTotalToolSchemaTokens      int          `json:"max_total_tool_schema_tokens"`
+	MaxToolResultOutputTokens     int          `json:"max_tool_result_output_tokens"`
+	MaxRequestBytes               int          `json:"max_request_bytes"`
+	MaxSystemBytes                int          `json:"max_system_bytes"`
+	MaxUserMessageBytes           int          `json:"max_user_message_bytes"`
+	MaxDefinitionBytes            int          `json:"max_definition_bytes"`
+	MaxObservationBytes           int          `json:"max_observation_bytes"`
+	MaxEventBytes                 int          `json:"max_event_bytes"`
+	MaxContextFactsBytes          int          `json:"max_context_facts_bytes"`
+	MaxRecentMemoryBytes          int          `json:"max_recent_memory_bytes"`
+	MaxTranscriptBytes            int          `json:"max_transcript_bytes"`
+	MaxToolDescriptionBytes       int          `json:"max_tool_description_bytes"`
+	MaxToolSchemaBytes            int          `json:"max_tool_schema_bytes"`
+	MaxTotalToolSchemaBytes       int          `json:"max_total_tool_schema_bytes"`
+	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
 	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
 	MaxToolResultOutputArrayItems int          `json:"max_tool_result_output_array_items"`
@@ -108,26 +122,25 @@ func DefaultConfig() Config {
 		AsyncActionTimeout:            45 * time.Second,
 		MemoryEnabled:                 boolPtr(defaultMemoryEnabled),
 		RecentMemoryLimit:             5,
-		MemoryContextSizeLimit:        4096,
 		MaxSteps:                      3,
 		MaxToolCallsPerStep:           4,
 		MaxToolCallsPerTurn:           6,
 		MaxAsyncActionsPerTurn:        1,
 		MaxParallelToolCalls:          4,
-		MaxRequestTokens:               budget.MaxRequestTokens,
-		MaxSystemTokens:                budget.MaxSystemTokens,
-		MaxUserMessageTokens:           budget.MaxUserMessageTokens,
-		MaxDefinitionTokens:            budget.MaxDefinitionTokens,
-		MaxObservationTokens:           budget.MaxObservationTokens,
-		MaxEventTokens:                 budget.MaxEventTokens,
-		MaxContextFactsTokens:          budget.MaxContextFactsTokens,
-		MaxRecentMemoryTokens:          budget.MaxRecentMemoryTokens,
-		MaxTranscriptTokens:            budget.MaxTranscriptTokens,
+		MaxRequestTokens:              budget.MaxRequestTokens,
+		MaxSystemTokens:               budget.MaxSystemTokens,
+		MaxUserMessageTokens:          budget.MaxUserMessageTokens,
+		MaxDefinitionTokens:           budget.MaxDefinitionTokens,
+		MaxObservationTokens:          budget.MaxObservationTokens,
+		MaxEventTokens:                budget.MaxEventTokens,
+		MaxContextFactsTokens:         budget.MaxContextFactsTokens,
+		MaxRecentMemoryTokens:         budget.MaxRecentMemoryTokens,
+		MaxTranscriptTokens:           budget.MaxTranscriptTokens,
 		MaxToolCount:                  budget.MaxToolCount,
-		MaxToolDescriptionTokens:       budget.MaxToolDescriptionTokens,
-		MaxToolSchemaTokens:            budget.MaxToolSchemaTokens,
-		MaxTotalToolSchemaTokens:       budget.MaxTotalToolSchemaTokens,
-		MaxToolResultOutputTokens:      budget.MaxToolResultOutputTokens,
+		MaxToolDescriptionTokens:      budget.MaxToolDescriptionTokens,
+		MaxToolSchemaTokens:           budget.MaxToolSchemaTokens,
+		MaxTotalToolSchemaTokens:      budget.MaxTotalToolSchemaTokens,
+		MaxToolResultOutputTokens:     budget.MaxToolResultOutputTokens,
 		MaxToolResultOutputDepth:      budget.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     budget.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: budget.MaxToolResultOutputArrayItems,
@@ -166,6 +179,11 @@ func LoadConfigFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse agent config: %w", err)
 	}
 
+	legacyBudgetFields := raw.legacyBudgetFields()
+	if len(legacyBudgetFields) > 0 {
+		log.Printf("agent config uses deprecated byte budget fields; migrate to *_tokens: %s", strings.Join(legacyBudgetFields, ", "))
+	}
+
 	cfg := Config{
 		MemoryEnabled:                 raw.MemoryEnabled,
 		TurnTimeout:                   durationMS(raw.TurnTimeoutMS),
@@ -175,26 +193,25 @@ func LoadConfigFile(path string) (Config, error) {
 		ActionStartTimeout:            durationMS(raw.ActionStartTimeoutMS),
 		AsyncActionTimeout:            durationMS(raw.AsyncActionTimeoutMS),
 		RecentMemoryLimit:             raw.RecentMemoryLimit,
-		MemoryContextSizeLimit:        raw.MemoryContextSizeLimit,
 		MaxSteps:                      raw.MaxSteps,
 		MaxToolCallsPerStep:           raw.MaxToolCallsPerStep,
 		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
 		MaxAsyncActionsPerTurn:        raw.MaxAsyncActionsPerTurn,
 		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
-		MaxRequestTokens:               raw.MaxRequestTokens,
-		MaxSystemTokens:                raw.MaxSystemTokens,
-		MaxUserMessageTokens:           raw.MaxUserMessageTokens,
-		MaxDefinitionTokens:            raw.MaxDefinitionTokens,
-		MaxObservationTokens:           raw.MaxObservationTokens,
-		MaxEventTokens:                 raw.MaxEventTokens,
-		MaxContextFactsTokens:          raw.MaxContextFactsTokens,
-		MaxRecentMemoryTokens:          raw.MaxRecentMemoryTokens,
-		MaxTranscriptTokens:            raw.MaxTranscriptTokens,
+		MaxRequestTokens:              budgetTokenValue(raw.MaxRequestTokens, raw.MaxRequestBytes),
+		MaxSystemTokens:               budgetTokenValue(raw.MaxSystemTokens, raw.MaxSystemBytes),
+		MaxUserMessageTokens:          budgetTokenValue(raw.MaxUserMessageTokens, raw.MaxUserMessageBytes),
+		MaxDefinitionTokens:           budgetTokenValue(raw.MaxDefinitionTokens, raw.MaxDefinitionBytes),
+		MaxObservationTokens:          budgetTokenValue(raw.MaxObservationTokens, raw.MaxObservationBytes),
+		MaxEventTokens:                budgetTokenValue(raw.MaxEventTokens, raw.MaxEventBytes),
+		MaxContextFactsTokens:         budgetTokenValue(raw.MaxContextFactsTokens, raw.MaxContextFactsBytes),
+		MaxRecentMemoryTokens:         recentMemoryTokenValue(raw),
+		MaxTranscriptTokens:           budgetTokenValue(raw.MaxTranscriptTokens, raw.MaxTranscriptBytes),
 		MaxToolCount:                  raw.MaxToolCount,
-		MaxToolDescriptionTokens:       raw.MaxToolDescriptionTokens,
-		MaxToolSchemaTokens:            raw.MaxToolSchemaTokens,
-		MaxTotalToolSchemaTokens:       raw.MaxTotalToolSchemaTokens,
-		MaxToolResultOutputTokens:      raw.MaxToolResultOutputTokens,
+		MaxToolDescriptionTokens:      budgetTokenValue(raw.MaxToolDescriptionTokens, raw.MaxToolDescriptionBytes),
+		MaxToolSchemaTokens:           budgetTokenValue(raw.MaxToolSchemaTokens, raw.MaxToolSchemaBytes),
+		MaxTotalToolSchemaTokens:      budgetTokenValue(raw.MaxTotalToolSchemaTokens, raw.MaxTotalToolSchemaBytes),
+		MaxToolResultOutputTokens:     budgetTokenValue(raw.MaxToolResultOutputTokens, raw.MaxToolResultOutputBytes),
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: raw.MaxToolResultOutputArrayItems,
@@ -264,9 +281,6 @@ func (c Config) WithDefaults() Config {
 	if c.RecentMemoryLimit <= 0 {
 		c.RecentMemoryLimit = defaults.RecentMemoryLimit
 	}
-	if c.MemoryContextSizeLimit <= 0 {
-		c.MemoryContextSizeLimit = defaults.MemoryContextSizeLimit
-	}
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = defaults.MaxSteps
 	}
@@ -281,9 +295,6 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MaxParallelToolCalls <= 0 {
 		c.MaxParallelToolCalls = defaults.MaxParallelToolCalls
-	}
-	if c.MaxRecentMemoryTokens <= 0 && c.MemoryContextSizeLimit > 0 {
-		c.MaxRecentMemoryTokens = c.MemoryContextSizeLimit
 	}
 	if c.MaxRequestTokens <= 0 {
 		c.MaxRequestTokens = defaults.MaxRequestTokens
@@ -308,9 +319,6 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MaxRecentMemoryTokens <= 0 {
 		c.MaxRecentMemoryTokens = defaults.MaxRecentMemoryTokens
-	}
-	if c.MemoryContextSizeLimit <= 0 {
-		c.MemoryContextSizeLimit = c.MaxRecentMemoryTokens
 	}
 	if c.MaxTranscriptTokens <= 0 {
 		c.MaxTranscriptTokens = defaults.MaxTranscriptTokens
@@ -341,6 +349,60 @@ func (c Config) WithDefaults() Config {
 	}
 	c.Prompt = c.Prompt.WithDefaults()
 	return c
+}
+
+func budgetTokenValue(tokenValue int, legacyBytes int) int {
+	if tokenValue > 0 {
+		return tokenValue
+	}
+	if legacyBytes > 0 {
+		return legacyBytesToEstimatedTokens(legacyBytes)
+	}
+	return 0
+}
+
+func recentMemoryTokenValue(raw fileConfig) int {
+	if raw.MaxRecentMemoryTokens > 0 {
+		return raw.MaxRecentMemoryTokens
+	}
+	if raw.MaxRecentMemoryBytes > 0 {
+		return legacyBytesToEstimatedTokens(raw.MaxRecentMemoryBytes)
+	}
+	if raw.MemoryContextSizeLimit > 0 {
+		return legacyBytesToEstimatedTokens(raw.MemoryContextSizeLimit)
+	}
+	return 0
+}
+
+func legacyBytesToEstimatedTokens(bytes int) int {
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + 3) / 4
+}
+
+func (c fileConfig) legacyBudgetFields() []string {
+	fields := make([]string, 0)
+	add := func(name string, value int) {
+		if value > 0 {
+			fields = append(fields, name)
+		}
+	}
+	add("memory_context_size_limit", c.MemoryContextSizeLimit)
+	add("max_request_bytes", c.MaxRequestBytes)
+	add("max_system_bytes", c.MaxSystemBytes)
+	add("max_user_message_bytes", c.MaxUserMessageBytes)
+	add("max_definition_bytes", c.MaxDefinitionBytes)
+	add("max_observation_bytes", c.MaxObservationBytes)
+	add("max_event_bytes", c.MaxEventBytes)
+	add("max_context_facts_bytes", c.MaxContextFactsBytes)
+	add("max_recent_memory_bytes", c.MaxRecentMemoryBytes)
+	add("max_transcript_bytes", c.MaxTranscriptBytes)
+	add("max_tool_description_bytes", c.MaxToolDescriptionBytes)
+	add("max_tool_schema_bytes", c.MaxToolSchemaBytes)
+	add("max_total_tool_schema_bytes", c.MaxTotalToolSchemaBytes)
+	add("max_tool_result_output_bytes", c.MaxToolResultOutputBytes)
+	return fields
 }
 
 // durationMS 将配置文件中的毫秒值转换成 time.Duration。

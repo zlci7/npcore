@@ -39,7 +39,6 @@ If Recent Memory is from today and current game time has not clearly advanced mu
 Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.`
 
 type BudgetConfig struct {
-	MemoryContextSizeLimit        int
 	MaxRequestTokens              int
 	MaxSystemTokens               int
 	MaxUserMessageTokens          int
@@ -148,10 +147,6 @@ func DefaultBudgetConfig() BudgetConfig {
 
 func (c BudgetConfig) WithDefaults() BudgetConfig {
 	defaults := DefaultBudgetConfig()
-	if c.MaxRecentMemoryTokens <= 0 && c.MemoryContextSizeLimit > 0 {
-		c.MaxRecentMemoryTokens = c.MemoryContextSizeLimit
-	}
-	c.MemoryContextSizeLimit = 0
 	c.MaxRequestTokens = positiveOrDefault(c.MaxRequestTokens, defaults.MaxRequestTokens)
 	c.MaxSystemTokens = positiveOrDefault(c.MaxSystemTokens, defaults.MaxSystemTokens)
 	c.MaxUserMessageTokens = positiveOrDefault(c.MaxUserMessageTokens, defaults.MaxUserMessageTokens)

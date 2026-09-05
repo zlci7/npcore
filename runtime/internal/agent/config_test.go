@@ -21,13 +21,13 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
   "async_action_timeout_ms": 6000,
   "memory_enabled": true,
   "recent_memory_limit": 7,
-  "memory_context_size_limit": 2048,
+  "max_recent_memory_tokens": 2048,
   "max_steps": 5,
   "max_tool_calls_per_step": 3,
   "max_tool_calls_per_turn": 9,
   "max_async_actions_per_turn": 2,
   "max_parallel_tool_calls": 2,
-  "max_tool_result_output_bytes": 4096,
+  "max_tool_result_output_tokens": 4096,
   "max_tool_result_output_depth": 3,
   "max_tool_result_output_fields": 16,
   "max_tool_result_output_array_items": 8,
@@ -75,8 +75,8 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 	if cfg.RecentMemoryLimit != 7 {
 		t.Fatalf("expected recent memory limit 7, got %d", cfg.RecentMemoryLimit)
 	}
-	if cfg.MemoryContextSizeLimit != 2048 {
-		t.Fatalf("expected memory context size limit 2048, got %d", cfg.MemoryContextSizeLimit)
+	if cfg.MaxRecentMemoryTokens != 2048 {
+		t.Fatalf("expected max recent memory tokens 2048, got %d", cfg.MaxRecentMemoryTokens)
 	}
 	if cfg.MaxSteps != 5 {
 		t.Fatalf("expected max steps 5, got %d", cfg.MaxSteps)
@@ -94,7 +94,7 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 		t.Fatalf("expected max parallel tool calls 2, got %d", cfg.MaxParallelToolCalls)
 	}
 	if cfg.MaxToolResultOutputTokens != 4096 {
-		t.Fatalf("expected max tool result output bytes 4096, got %d", cfg.MaxToolResultOutputTokens)
+		t.Fatalf("expected max tool result output tokens 4096, got %d", cfg.MaxToolResultOutputTokens)
 	}
 	if cfg.MaxToolResultOutputDepth != 3 {
 		t.Fatalf("expected max tool result output depth 3, got %d", cfg.MaxToolResultOutputDepth)
@@ -163,9 +163,6 @@ func TestConfigWithDefaultsFillsPromptConfig(t *testing.T) {
 	if cfg.RecentMemoryLimit <= 0 {
 		t.Fatalf("expected positive default recent memory limit, got %d", cfg.RecentMemoryLimit)
 	}
-	if cfg.MemoryContextSizeLimit <= 0 {
-		t.Fatalf("expected positive default memory context size limit, got %d", cfg.MemoryContextSizeLimit)
-	}
 }
 
 func TestDefaultToolInstructionDoesNotNameGameSpecificTools(t *testing.T) {
@@ -233,7 +230,7 @@ func TestConfigLoadsPhase5Budgets(t *testing.T) {
   "max_tool_calls_per_step": 4,
   "max_tool_calls_per_turn": 8,
   "max_parallel_tool_calls": 3,
-  "max_tool_result_output_bytes": 1234,
+  "max_tool_result_output_tokens": 1234,
   "max_tool_result_output_depth": 5,
   "max_tool_result_output_fields": 32,
   "max_tool_result_output_array_items": 12
@@ -266,7 +263,7 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 		MaxToolCallsPerTurn:           -2,
 		MaxAsyncActionsPerTurn:        0,
 		MaxParallelToolCalls:          0,
-		MaxToolResultOutputTokens:      -1,
+		MaxToolResultOutputTokens:     -1,
 		MaxToolResultOutputDepth:      0,
 		MaxToolResultOutputFields:     -1,
 		MaxToolResultOutputArrayItems: 0,
@@ -313,19 +310,19 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "agent.json")
 	data := []byte(`{
-  "max_request_bytes": 10000,
-  "max_system_bytes": 1000,
-  "max_user_message_bytes": 8000,
-  "max_definition_bytes": 1200,
-  "max_observation_bytes": 2200,
-  "max_event_bytes": 900,
-  "max_context_facts_bytes": 700,
-  "max_recent_memory_bytes": 333,
-  "max_transcript_bytes": 444,
+  "max_request_tokens": 10000,
+  "max_system_tokens": 1000,
+  "max_user_message_tokens": 8000,
+  "max_definition_tokens": 1200,
+  "max_observation_tokens": 2200,
+  "max_event_tokens": 900,
+  "max_context_facts_tokens": 700,
+  "max_recent_memory_tokens": 333,
+  "max_transcript_tokens": 444,
   "max_tool_count": 5,
-  "max_tool_description_bytes": 88,
-  "max_tool_schema_bytes": 99,
-  "max_total_tool_schema_bytes": 222
+  "max_tool_description_tokens": 88,
+  "max_tool_schema_tokens": 99,
+  "max_total_tool_schema_tokens": 222
 }`)
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -353,11 +350,89 @@ func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
 	}
 }
 
-func TestConfigMapsLegacyMemoryContextLimitToRecentMemoryBudget(t *testing.T) {
-	cfg := (agent.Config{MemoryContextSizeLimit: 777}).WithDefaults()
+func TestLoadConfigFileMapsLegacyByteBudgetsToEstimatedTokens(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	data := []byte(`{
+  "max_request_bytes": 10000,
+  "max_system_bytes": 1000,
+  "max_user_message_bytes": 8000,
+  "max_definition_bytes": 1200,
+  "max_observation_bytes": 2200,
+  "max_event_bytes": 900,
+  "max_context_facts_bytes": 700,
+  "max_recent_memory_bytes": 333,
+  "max_transcript_bytes": 444,
+  "max_tool_description_bytes": 88,
+  "max_tool_schema_bytes": 99,
+  "max_total_tool_schema_bytes": 222,
+  "max_tool_result_output_bytes": 1234
+}`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
-	if cfg.MaxRecentMemoryTokens != 777 {
-		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy MemoryContextSizeLimit mapping to 777", cfg.MaxRecentMemoryTokens)
+	cfg, err := agent.LoadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.MaxRequestTokens != 2500 ||
+		cfg.MaxSystemTokens != 250 ||
+		cfg.MaxUserMessageTokens != 2000 ||
+		cfg.MaxDefinitionTokens != 300 ||
+		cfg.MaxObservationTokens != 550 ||
+		cfg.MaxEventTokens != 225 ||
+		cfg.MaxContextFactsTokens != 175 ||
+		cfg.MaxRecentMemoryTokens != 84 ||
+		cfg.MaxTranscriptTokens != 111 ||
+		cfg.MaxToolDescriptionTokens != 22 ||
+		cfg.MaxToolSchemaTokens != 25 ||
+		cfg.MaxTotalToolSchemaTokens != 56 ||
+		cfg.MaxToolResultOutputTokens != 309 {
+		t.Fatalf("legacy byte budgets were not converted with ceil(bytes/4): %+v", cfg)
+	}
+}
+
+func TestLoadConfigFilePrefersTokenBudgetsOverLegacyBytes(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	data := []byte(`{
+  "max_request_tokens": 9000,
+  "max_request_bytes": 10000,
+  "max_recent_memory_tokens": 321,
+  "max_recent_memory_bytes": 333,
+  "memory_context_size_limit": 777
+}`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := agent.LoadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.MaxRequestTokens != 9000 {
+		t.Fatalf("MaxRequestTokens = %d, want token field to win", cfg.MaxRequestTokens)
+	}
+	if cfg.MaxRecentMemoryTokens != 321 {
+		t.Fatalf("MaxRecentMemoryTokens = %d, want token field to win over legacy aliases", cfg.MaxRecentMemoryTokens)
+	}
+}
+
+func TestLoadConfigFileMapsLegacyMemoryContextLimitToRecentMemoryTokens(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	data := []byte(`{"memory_context_size_limit": 777}`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := agent.LoadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.MaxRecentMemoryTokens != 195 {
+		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy memory_context_size_limit converted to 195", cfg.MaxRecentMemoryTokens)
 	}
 }
 
