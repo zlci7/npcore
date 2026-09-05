@@ -10,6 +10,7 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+	"gameagent/runtime/internal/tokenestimate"
 	"gameagent/runtime/internal/tool"
 )
 
@@ -39,20 +40,20 @@ Return tool calls only when an environment action is needed. If no action is nee
 
 type BudgetConfig struct {
 	MemoryContextSizeLimit        int
-	MaxRequestBytes               int
-	MaxSystemBytes                int
-	MaxUserMessageBytes           int
-	MaxDefinitionBytes            int
-	MaxObservationBytes           int
-	MaxEventBytes                 int
-	MaxContextFactsBytes          int
-	MaxRecentMemoryBytes          int
-	MaxTranscriptBytes            int
+	MaxRequestTokens              int
+	MaxSystemTokens               int
+	MaxUserMessageTokens          int
+	MaxDefinitionTokens           int
+	MaxObservationTokens          int
+	MaxEventTokens                int
+	MaxContextFactsTokens         int
+	MaxRecentMemoryTokens         int
+	MaxTranscriptTokens           int
 	MaxToolCount                  int
-	MaxToolDescriptionBytes       int
-	MaxToolSchemaBytes            int
-	MaxTotalToolSchemaBytes       int
-	MaxToolResultOutputBytes      int
+	MaxToolDescriptionTokens      int
+	MaxToolSchemaTokens           int
+	MaxTotalToolSchemaTokens      int
+	MaxToolResultOutputTokens     int
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
 	MaxToolResultOutputArrayItems int
@@ -73,18 +74,18 @@ type ContextBuildReport struct {
 	RecentMemory            RetentionReport
 	Transcript              RetentionReport
 	ToolAdmission           ToolAdmissionSummary
-	FinalRequestSize        RequestSizeSummary
+	FinalRequestSize        RequestTokenSummary
 	ReasonCodes             []string
 }
 
 type SectionReports []SectionReport
 
 type SectionReport struct {
-	Name       string
-	Included   bool
-	ProxyBytes int
-	Cropped    bool
-	Reason     string
+	Name                      string
+	Included                  bool
+	ProjectionEstimatedTokens int
+	Cropped                   bool
+	Reason                    string
 }
 
 type RetentionReport struct {
@@ -102,16 +103,16 @@ type ToolAdmissionSummary struct {
 	DroppedTools                    []tool.ToolAdmissionDrop
 	DroppedToolsTruncatedCount      int
 	DroppedReasonCounts             map[string]int
-	TotalSchemaBytes                int
+	TotalSchemaEstimatedTokens      int
 }
 
-type RequestSizeSummary struct {
-	SystemBytes      int
-	MessagesBytes    int
-	UserMessageBytes int
-	ToolsBytes       int
-	ControlsBytes    int
-	TotalBytes       int
+type RequestTokenSummary struct {
+	SystemEstimatedTokens      int
+	MessagesEstimatedTokens    int
+	UserMessageEstimatedTokens int
+	ToolsEstimatedTokens       int
+	ControlsEstimatedTokens    int
+	TotalEstimatedTokens       int
 }
 
 func (r SectionReports) Has(name string) bool {
@@ -125,20 +126,20 @@ func (r SectionReports) Has(name string) bool {
 
 func DefaultBudgetConfig() BudgetConfig {
 	return BudgetConfig{
-		MaxRequestBytes:               65536,
-		MaxSystemBytes:                8192,
-		MaxUserMessageBytes:           49152,
-		MaxDefinitionBytes:            8192,
-		MaxObservationBytes:           8192,
-		MaxEventBytes:                 4096,
-		MaxContextFactsBytes:          4096,
-		MaxRecentMemoryBytes:          4096,
-		MaxTranscriptBytes:            16384,
+		MaxRequestTokens:              65536,
+		MaxSystemTokens:               8192,
+		MaxUserMessageTokens:          49152,
+		MaxDefinitionTokens:           8192,
+		MaxObservationTokens:          8192,
+		MaxEventTokens:                4096,
+		MaxContextFactsTokens:         4096,
+		MaxRecentMemoryTokens:         4096,
+		MaxTranscriptTokens:           16384,
 		MaxToolCount:                  64,
-		MaxToolDescriptionBytes:       2048,
-		MaxToolSchemaBytes:            8192,
-		MaxTotalToolSchemaBytes:       32768,
-		MaxToolResultOutputBytes:      8192,
+		MaxToolDescriptionTokens:      2048,
+		MaxToolSchemaTokens:           8192,
+		MaxTotalToolSchemaTokens:      32768,
+		MaxToolResultOutputTokens:     8192,
 		MaxToolResultOutputDepth:      4,
 		MaxToolResultOutputFields:     64,
 		MaxToolResultOutputArrayItems: 32,
@@ -147,24 +148,24 @@ func DefaultBudgetConfig() BudgetConfig {
 
 func (c BudgetConfig) WithDefaults() BudgetConfig {
 	defaults := DefaultBudgetConfig()
-	if c.MaxRecentMemoryBytes <= 0 && c.MemoryContextSizeLimit > 0 {
-		c.MaxRecentMemoryBytes = c.MemoryContextSizeLimit
+	if c.MaxRecentMemoryTokens <= 0 && c.MemoryContextSizeLimit > 0 {
+		c.MaxRecentMemoryTokens = c.MemoryContextSizeLimit
 	}
 	c.MemoryContextSizeLimit = 0
-	c.MaxRequestBytes = positiveOrDefault(c.MaxRequestBytes, defaults.MaxRequestBytes)
-	c.MaxSystemBytes = positiveOrDefault(c.MaxSystemBytes, defaults.MaxSystemBytes)
-	c.MaxUserMessageBytes = positiveOrDefault(c.MaxUserMessageBytes, defaults.MaxUserMessageBytes)
-	c.MaxDefinitionBytes = positiveOrDefault(c.MaxDefinitionBytes, defaults.MaxDefinitionBytes)
-	c.MaxObservationBytes = positiveOrDefault(c.MaxObservationBytes, defaults.MaxObservationBytes)
-	c.MaxEventBytes = positiveOrDefault(c.MaxEventBytes, defaults.MaxEventBytes)
-	c.MaxContextFactsBytes = positiveOrDefault(c.MaxContextFactsBytes, defaults.MaxContextFactsBytes)
-	c.MaxRecentMemoryBytes = positiveOrDefault(c.MaxRecentMemoryBytes, defaults.MaxRecentMemoryBytes)
-	c.MaxTranscriptBytes = positiveOrDefault(c.MaxTranscriptBytes, defaults.MaxTranscriptBytes)
+	c.MaxRequestTokens = positiveOrDefault(c.MaxRequestTokens, defaults.MaxRequestTokens)
+	c.MaxSystemTokens = positiveOrDefault(c.MaxSystemTokens, defaults.MaxSystemTokens)
+	c.MaxUserMessageTokens = positiveOrDefault(c.MaxUserMessageTokens, defaults.MaxUserMessageTokens)
+	c.MaxDefinitionTokens = positiveOrDefault(c.MaxDefinitionTokens, defaults.MaxDefinitionTokens)
+	c.MaxObservationTokens = positiveOrDefault(c.MaxObservationTokens, defaults.MaxObservationTokens)
+	c.MaxEventTokens = positiveOrDefault(c.MaxEventTokens, defaults.MaxEventTokens)
+	c.MaxContextFactsTokens = positiveOrDefault(c.MaxContextFactsTokens, defaults.MaxContextFactsTokens)
+	c.MaxRecentMemoryTokens = positiveOrDefault(c.MaxRecentMemoryTokens, defaults.MaxRecentMemoryTokens)
+	c.MaxTranscriptTokens = positiveOrDefault(c.MaxTranscriptTokens, defaults.MaxTranscriptTokens)
 	c.MaxToolCount = positiveOrDefault(c.MaxToolCount, defaults.MaxToolCount)
-	c.MaxToolDescriptionBytes = positiveOrDefault(c.MaxToolDescriptionBytes, defaults.MaxToolDescriptionBytes)
-	c.MaxToolSchemaBytes = positiveOrDefault(c.MaxToolSchemaBytes, defaults.MaxToolSchemaBytes)
-	c.MaxTotalToolSchemaBytes = positiveOrDefault(c.MaxTotalToolSchemaBytes, defaults.MaxTotalToolSchemaBytes)
-	c.MaxToolResultOutputBytes = positiveOrDefault(c.MaxToolResultOutputBytes, defaults.MaxToolResultOutputBytes)
+	c.MaxToolDescriptionTokens = positiveOrDefault(c.MaxToolDescriptionTokens, defaults.MaxToolDescriptionTokens)
+	c.MaxToolSchemaTokens = positiveOrDefault(c.MaxToolSchemaTokens, defaults.MaxToolSchemaTokens)
+	c.MaxTotalToolSchemaTokens = positiveOrDefault(c.MaxTotalToolSchemaTokens, defaults.MaxTotalToolSchemaTokens)
+	c.MaxToolResultOutputTokens = positiveOrDefault(c.MaxToolResultOutputTokens, defaults.MaxToolResultOutputTokens)
 	c.MaxToolResultOutputDepth = positiveOrDefault(c.MaxToolResultOutputDepth, defaults.MaxToolResultOutputDepth)
 	c.MaxToolResultOutputFields = positiveOrDefault(c.MaxToolResultOutputFields, defaults.MaxToolResultOutputFields)
 	c.MaxToolResultOutputArrayItems = positiveOrDefault(c.MaxToolResultOutputArrayItems, defaults.MaxToolResultOutputArrayItems)
@@ -266,11 +267,11 @@ func (e Engine) Build(input BuildInput) (BuildResult, error) {
 	bounds := projectionBoundsFromEngineConfig(e.config)
 	recentMemory, recentMemoryReport := projectRecentMemories(
 		input.RecentMemories,
-		e.config.MaxRecentMemoryBytes,
+		e.config.MaxRecentMemoryTokens,
 		currentGameTimeFromEventObservation(input.Event, input.Observation),
 		bounds,
 	)
-	transcript, transcriptReport, err := projectCurrentTurnTranscript(input.Transcript, bounds, e.config.MaxTranscriptBytes)
+	transcript, transcriptReport, err := projectCurrentTurnTranscript(input.Transcript, bounds, e.config.MaxTranscriptTokens)
 	if err != nil {
 		report := ContextBuildReport{
 			EffectiveBudget: e.config,
@@ -334,17 +335,17 @@ func newContextBuildReport(projection ContextProjection, input BuildInput, budge
 
 func sectionReportsForProjection(projection ContextProjection) SectionReports {
 	return SectionReports{
-		{Name: "runtime_policy", Included: projection.RuntimePolicy != "", ProxyBytes: sectionProxyBytes(projection.RuntimePolicy)},
-		{Name: "instruction", Included: projection.Instruction != "", ProxyBytes: sectionProxyBytes(projection.Instruction)},
-		{Name: "agent_descriptor", Included: true, ProxyBytes: sectionProxyBytes(projection.AgentDescriptor)},
-		{Name: "game_definition", Included: projection.GameDefinition != nil, ProxyBytes: sectionProxyBytes(projection.GameDefinition)},
-		{Name: "agent_definition", Included: projection.AgentDefinition != nil, ProxyBytes: sectionProxyBytes(projection.AgentDefinition)},
-		{Name: "current_event", Included: projection.CurrentEvent.EventID != "", ProxyBytes: sectionProxyBytes(projection.CurrentEvent)},
-		{Name: "current_event_context_facts", Included: len(projection.CurrentEventContextFacts) > 0, ProxyBytes: sectionProxyBytes(projection.CurrentEventContextFacts)},
-		{Name: "current_observation", Included: projection.CurrentObservation.EntityID != "", ProxyBytes: sectionProxyBytes(projection.CurrentObservation)},
-		{Name: "recent_memory", Included: len(projection.RecentMemory) > 0, ProxyBytes: sectionProxyBytes(projection.RecentMemory)},
-		{Name: "tools", Included: len(projection.Tools) > 0, ProxyBytes: sectionProxyBytes(projection.Tools)},
-		{Name: "current_turn_transcript", Included: len(projection.CurrentTurnTranscript) > 0, ProxyBytes: sectionProxyBytes(projection.CurrentTurnTranscript)},
+		{Name: "runtime_policy", Included: projection.RuntimePolicy != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.RuntimePolicy)},
+		{Name: "instruction", Included: projection.Instruction != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.Instruction)},
+		{Name: "agent_descriptor", Included: true, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.AgentDescriptor)},
+		{Name: "game_definition", Included: projection.GameDefinition != nil, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.GameDefinition)},
+		{Name: "agent_definition", Included: projection.AgentDefinition != nil, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.AgentDefinition)},
+		{Name: "current_event", Included: projection.CurrentEvent.EventID != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentEvent)},
+		{Name: "current_event_context_facts", Included: len(projection.CurrentEventContextFacts) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentEventContextFacts)},
+		{Name: "current_observation", Included: projection.CurrentObservation.EntityID != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentObservation)},
+		{Name: "recent_memory", Included: len(projection.RecentMemory) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.RecentMemory)},
+		{Name: "tools", Included: len(projection.Tools) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.Tools)},
+		{Name: "current_turn_transcript", Included: len(projection.CurrentTurnTranscript) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentTurnTranscript)},
 	}
 }
 
@@ -365,24 +366,24 @@ func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, r
 		report.addReason(ReasonRequiredContextOverBudget)
 		err = definitionErr
 	}
-	if budget.MaxEventBytes > 0 && sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
-		projection.CurrentEvent.Payload = truncationMap("current event payload exceeded byte limit")
+	if budget.MaxEventTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentEvent) > budget.MaxEventTokens {
+		projection.CurrentEvent.Payload = truncationMap("current event payload exceeded token limit")
 		report.addReason(ReasonEventBudgetExceeded)
 		sectionCropped["current_event"] = ReasonEventBudgetExceeded
 	}
-	if budget.MaxObservationBytes > 0 && sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+	if budget.MaxObservationTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentObservation) > budget.MaxObservationTokens {
 		projection.CurrentObservation.NearbyEntities = nil
 		projection.CurrentObservation.Extensions = nil
 		if len(projection.CurrentObservation.State) > 0 {
-			projection.CurrentObservation.State = truncationMap("current observation state exceeded byte limit")
+			projection.CurrentObservation.State = truncationMap("current observation state exceeded token limit")
 		}
 		report.addReason(ReasonObservationBudgetExceeded)
 		sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
 	}
-	if budget.MaxContextFactsBytes > 0 && sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+	if budget.MaxContextFactsTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentEventContextFacts) > budget.MaxContextFactsTokens {
 		for i := range projection.CurrentEventContextFacts {
 			if projection.CurrentEventContextFacts[i].Text != "" {
-				projection.CurrentEventContextFacts[i].Text = "_truncated: context fact text exceeded byte limit"
+				projection.CurrentEventContextFacts[i].Text = "_truncated: context fact text exceeded token limit"
 			}
 			projection.CurrentEventContextFacts[i].Attributes = nil
 		}
@@ -402,54 +403,65 @@ func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, r
 
 func enforceRequiredSectionBudgets(projection ContextProjection, budget BudgetConfig, report *ContextBuildReport, sectionCropped map[string]string) (ContextProjection, error) {
 	var err error
-	if budget.MaxEventBytes > 0 && sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
+	if budget.MaxEventTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentEvent) > budget.MaxEventTokens {
 		if dropEventPayload(&projection) {
 			report.addReason(ReasonEventBudgetExceeded)
 			sectionCropped["current_event"] = ReasonEventBudgetExceeded
 		}
-		if sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
+		if sectionProjectionEstimatedTokens(projection.CurrentEvent) > budget.MaxEventTokens {
 			report.addReason(ReasonEventBudgetExceeded)
 			report.addReason(ReasonRequiredContextOverBudget)
 			report.addReason(ReasonRequiredSectionOverBudget)
 			sectionCropped["current_event"] = ReasonEventBudgetExceeded
-			err = firstError(err, fmt.Errorf("%w: current event required shell exceeds byte budget", ErrBudgetExceeded))
+			err = firstError(err, fmt.Errorf("%w: current event required shell exceeds token budget", ErrBudgetExceeded))
 		}
 	}
-	if budget.MaxObservationBytes > 0 && sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+	if budget.MaxObservationTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentObservation) > budget.MaxObservationTokens {
 		if dropObservationOptionalFields(&projection) {
 			report.addReason(ReasonObservationBudgetExceeded)
 			sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
 		}
-		if sectionProxyBytes(projection.CurrentObservation) > budget.MaxObservationBytes {
+		if sectionProjectionEstimatedTokens(projection.CurrentObservation) > budget.MaxObservationTokens {
 			report.addReason(ReasonObservationBudgetExceeded)
 			report.addReason(ReasonRequiredContextOverBudget)
 			report.addReason(ReasonRequiredSectionOverBudget)
 			sectionCropped["current_observation"] = ReasonObservationBudgetExceeded
-			err = firstError(err, fmt.Errorf("%w: current observation required minimum exceeds byte budget", ErrBudgetExceeded))
+			err = firstError(err, fmt.Errorf("%w: current observation required minimum exceeds token budget", ErrBudgetExceeded))
 		}
 	}
-	if budget.MaxContextFactsBytes > 0 && sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+	if budget.MaxContextFactsTokens > 0 && sectionProjectionEstimatedTokens(projection.CurrentEventContextFacts) > budget.MaxContextFactsTokens {
 		if dropContextFactOptionalFields(&projection) {
 			report.addReason(ReasonContextFactsBudgetExceeded)
 			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
 		}
-		if sectionProxyBytes(projection.CurrentEventContextFacts) > budget.MaxContextFactsBytes {
+		if sectionProjectionEstimatedTokens(projection.CurrentEventContextFacts) > budget.MaxContextFactsTokens {
 			report.addReason(ReasonContextFactsBudgetExceeded)
 			report.addReason(ReasonRequiredContextOverBudget)
 			report.addReason(ReasonRequiredSectionOverBudget)
 			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
-			err = firstError(err, fmt.Errorf("%w: current event context facts required minimum exceeds byte budget", ErrBudgetExceeded))
+			err = firstError(err, fmt.Errorf("%w: current event context facts required minimum exceeds token budget", ErrBudgetExceeded))
 		}
 	}
 	return projection, err
 }
 
 func enforceGlobalRequestBudget(projection ContextProjection, budget BudgetConfig, report ContextBuildReport, sectionCropped map[string]string) (ContextProjection, ContextBuildReport, error) {
-	if projectionFitsRequestBudget(projection, budget) {
+	fits, err := projectionFitsRequestBudget(projection, budget)
+	if err != nil {
+		return projection, report, err
+	}
+	if fits {
 		return projection, report, nil
 	}
 
-	for !projectionFitsRequestBudget(projection, budget) {
+	for {
+		fits, err := projectionFitsRequestBudget(projection, budget)
+		if err != nil {
+			return projection, report, err
+		}
+		if fits {
+			return projection, report, nil
+		}
 		switch {
 		case trimTranscriptToLatestGroup(&projection, &report):
 			report.addReason(ReasonTranscriptBudgetExceeded)
@@ -475,27 +487,33 @@ func enforceGlobalRequestBudget(projection ContextProjection, budget BudgetConfi
 			report.addReason(ReasonDefinitionBudgetExceeded)
 			sectionCropped["agent_definition"] = ReasonDefinitionBudgetExceeded
 		default:
-			size := measureProjectionRequest(projection)
+			size, err := measureProjectionRequest(projection)
+			if err != nil {
+				return projection, report, err
+			}
 			report.addReason(ReasonRequiredContextOverBudget)
 			if RequiredRequestSectionExceedsBudget(size, budget) {
 				report.addReason(ReasonRequiredSectionOverBudget)
 			}
-			return projection, report, RequestSizeBudgetError(size, budget)
+			return projection, report, RequestTokenBudgetError(size, budget)
 		}
 	}
-	return projection, report, nil
 }
 
-func projectionFitsRequestBudget(projection ContextProjection, budget BudgetConfig) bool {
-	return !RequestSizeExceedsBudget(measureProjectionRequest(projection), budget)
+func projectionFitsRequestBudget(projection ContextProjection, budget BudgetConfig) (bool, error) {
+	size, err := measureProjectionRequest(projection)
+	if err != nil {
+		return false, err
+	}
+	return !RequestEstimatedTokensExceedBudget(size, budget), nil
 }
 
-func measureProjectionRequest(projection ContextProjection) RequestSizeSummary {
+func measureProjectionRequest(projection ContextProjection) (RequestTokenSummary, error) {
 	req, err := NewRenderer().Render(projection)
 	if err != nil {
-		return RequestSizeSummary{}
+		return RequestTokenSummary{}, err
 	}
-	return MeasureRequest(req)
+	return EstimateRequestTokens(req)
 }
 
 func dropOldestRecentMemory(projection *ContextProjection) bool {
@@ -588,7 +606,7 @@ type definitionBudgetCrop struct {
 }
 
 func applyDefinitionBudget(projection ContextProjection, budget BudgetConfig) (ContextProjection, definitionBudgetCrop, error) {
-	if budget.MaxDefinitionBytes <= 0 || (projection.AgentDefinition == nil && projection.GameDefinition == nil) {
+	if budget.MaxDefinitionTokens <= 0 || (projection.AgentDefinition == nil && projection.GameDefinition == nil) {
 		return projection, definitionBudgetCrop{}, nil
 	}
 
@@ -600,17 +618,17 @@ func applyDefinitionBudget(projection ContextProjection, budget BudgetConfig) (C
 
 	projection.AgentDefinition = agent
 	projection.GameDefinition = game
-	if definitionBudgetBytes(agent, game) > budget.MaxDefinitionBytes {
+	if definitionBudgetEstimatedTokens(agent, game) > budget.MaxDefinitionTokens {
 		crop.Agent = sourceAgent != nil && !agentDefinitionsEqual(sourceAgent, agent)
 		crop.Game = sourceGame != nil && !gameDefinitionsEqual(sourceGame, game)
-		return projection, crop, fmt.Errorf("%w: definition required minimum exceeds byte budget", ErrBudgetExceeded)
+		return projection, crop, fmt.Errorf("%w: definition required minimum exceeds token budget", ErrBudgetExceeded)
 	}
 
 	if sourceAgent != nil {
-		fillAgentDefinitionWithinBudget(&agent, game, sourceAgent, budget.MaxDefinitionBytes)
+		fillAgentDefinitionWithinBudget(&agent, game, sourceAgent, budget.MaxDefinitionTokens)
 	}
 	if sourceGame != nil {
-		fillGameDefinitionWithinBudget(agent, &game, sourceGame, budget.MaxDefinitionBytes)
+		fillGameDefinitionWithinBudget(agent, &game, sourceGame, budget.MaxDefinitionTokens)
 	}
 	projection.AgentDefinition = agent
 	projection.GameDefinition = game
@@ -758,7 +776,7 @@ func tryUpdateAgentDefinition(agent **definition.AgentDefinition, game *definiti
 	}
 	candidate := copyAgentDefinition(*agent)
 	update(candidate)
-	if definitionBudgetBytes(candidate, game) > limit {
+	if definitionBudgetEstimatedTokens(candidate, game) > limit {
 		return false
 	}
 	*agent = candidate
@@ -771,20 +789,20 @@ func tryUpdateGameDefinition(agent *definition.AgentDefinition, game **definitio
 	}
 	candidate := copyGameDefinition(*game)
 	update(candidate)
-	if definitionBudgetBytes(agent, candidate) > limit {
+	if definitionBudgetEstimatedTokens(agent, candidate) > limit {
 		return false
 	}
 	*game = candidate
 	return true
 }
 
-func definitionBudgetBytes(agent *definition.AgentDefinition, game *definition.GameDefinition) int {
+func definitionBudgetEstimatedTokens(agent *definition.AgentDefinition, game *definition.GameDefinition) int {
 	total := 0
 	if agent != nil {
-		total += sectionProxyBytes(agent)
+		total += sectionProjectionEstimatedTokens(agent)
 	}
 	if game != nil {
-		total += sectionProxyBytes(game)
+		total += sectionProjectionEstimatedTokens(game)
 	}
 	return total
 }
@@ -847,8 +865,16 @@ func truncationMap(message string) map[string]any {
 	return map[string]any{"_truncated": message}
 }
 
-func sectionProxyBytes(value any) int {
-	return len([]byte(stableCompactJSON(value)))
+func mustSectionProjectionEstimatedTokens(value any) int {
+	return sectionProjectionEstimatedTokens(value)
+}
+
+func sectionProjectionEstimatedTokens(value any) int {
+	tokens, err := tokenestimate.EstimateStableJSON(value)
+	if err != nil {
+		return 0
+	}
+	return tokens
 }
 
 func (r *ContextBuildReport) addReason(reason string) {

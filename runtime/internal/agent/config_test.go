@@ -93,8 +93,8 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 	if cfg.MaxParallelToolCalls != 2 {
 		t.Fatalf("expected max parallel tool calls 2, got %d", cfg.MaxParallelToolCalls)
 	}
-	if cfg.MaxToolResultOutputBytes != 4096 {
-		t.Fatalf("expected max tool result output bytes 4096, got %d", cfg.MaxToolResultOutputBytes)
+	if cfg.MaxToolResultOutputTokens != 4096 {
+		t.Fatalf("expected max tool result output bytes 4096, got %d", cfg.MaxToolResultOutputTokens)
 	}
 	if cfg.MaxToolResultOutputDepth != 3 {
 		t.Fatalf("expected max tool result output depth 3, got %d", cfg.MaxToolResultOutputDepth)
@@ -251,7 +251,7 @@ func TestConfigLoadsPhase5Budgets(t *testing.T) {
 		cfg.MaxToolCallsPerStep != 4 ||
 		cfg.MaxToolCallsPerTurn != 8 ||
 		cfg.MaxParallelToolCalls != 3 ||
-		cfg.MaxToolResultOutputBytes != 1234 ||
+		cfg.MaxToolResultOutputTokens != 1234 ||
 		cfg.MaxToolResultOutputDepth != 5 ||
 		cfg.MaxToolResultOutputFields != 32 ||
 		cfg.MaxToolResultOutputArrayItems != 12 {
@@ -266,7 +266,7 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 		MaxToolCallsPerTurn:           -2,
 		MaxAsyncActionsPerTurn:        0,
 		MaxParallelToolCalls:          0,
-		MaxToolResultOutputBytes:      -1,
+		MaxToolResultOutputTokens:      -1,
 		MaxToolResultOutputDepth:      0,
 		MaxToolResultOutputFields:     -1,
 		MaxToolResultOutputArrayItems: 0,
@@ -287,8 +287,8 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 	if cfg.MaxParallelToolCalls != 4 {
 		t.Fatalf("MaxParallelToolCalls = %d, want 4", cfg.MaxParallelToolCalls)
 	}
-	if cfg.MaxToolResultOutputBytes != 8192 {
-		t.Fatalf("MaxToolResultOutputBytes = %d, want 8192", cfg.MaxToolResultOutputBytes)
+	if cfg.MaxToolResultOutputTokens != 8192 {
+		t.Fatalf("MaxToolResultOutputTokens = %d, want 8192", cfg.MaxToolResultOutputTokens)
 	}
 	if cfg.MaxToolResultOutputDepth != 4 {
 		t.Fatalf("MaxToolResultOutputDepth = %d, want 4", cfg.MaxToolResultOutputDepth)
@@ -336,19 +336,19 @@ func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.MaxRequestBytes != 10000 ||
-		cfg.MaxSystemBytes != 1000 ||
-		cfg.MaxUserMessageBytes != 8000 ||
-		cfg.MaxDefinitionBytes != 1200 ||
-		cfg.MaxObservationBytes != 2200 ||
-		cfg.MaxEventBytes != 900 ||
-		cfg.MaxContextFactsBytes != 700 ||
-		cfg.MaxRecentMemoryBytes != 333 ||
-		cfg.MaxTranscriptBytes != 444 ||
+	if cfg.MaxRequestTokens != 10000 ||
+		cfg.MaxSystemTokens != 1000 ||
+		cfg.MaxUserMessageTokens != 8000 ||
+		cfg.MaxDefinitionTokens != 1200 ||
+		cfg.MaxObservationTokens != 2200 ||
+		cfg.MaxEventTokens != 900 ||
+		cfg.MaxContextFactsTokens != 700 ||
+		cfg.MaxRecentMemoryTokens != 333 ||
+		cfg.MaxTranscriptTokens != 444 ||
 		cfg.MaxToolCount != 5 ||
-		cfg.MaxToolDescriptionBytes != 88 ||
-		cfg.MaxToolSchemaBytes != 99 ||
-		cfg.MaxTotalToolSchemaBytes != 222 {
+		cfg.MaxToolDescriptionTokens != 88 ||
+		cfg.MaxToolSchemaTokens != 99 ||
+		cfg.MaxTotalToolSchemaTokens != 222 {
 		t.Fatalf("phase7.4 budget config not loaded: %+v", cfg)
 	}
 }
@@ -356,8 +356,8 @@ func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
 func TestConfigMapsLegacyMemoryContextLimitToRecentMemoryBudget(t *testing.T) {
 	cfg := (agent.Config{MemoryContextSizeLimit: 777}).WithDefaults()
 
-	if cfg.MaxRecentMemoryBytes != 777 {
-		t.Fatalf("MaxRecentMemoryBytes = %d, want legacy MemoryContextSizeLimit mapping to 777", cfg.MaxRecentMemoryBytes)
+	if cfg.MaxRecentMemoryTokens != 777 {
+		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy MemoryContextSizeLimit mapping to 777", cfg.MaxRecentMemoryTokens)
 	}
 }
 

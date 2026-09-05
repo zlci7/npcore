@@ -802,7 +802,7 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
 	target := &protocolv1alpha2.EntityRef{EntityId: key.EntityID, DefinitionId: key.EntityID}
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MaxToolResultOutputBytes:      300,
+		MaxToolResultOutputTokens:      300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,

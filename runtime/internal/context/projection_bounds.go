@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	"gameagent/runtime/internal/tokenestimate"
 )
 
 type projectionBounds struct {
-	maxBytes      int
+	maxTokens     int
 	maxDepth      int
 	maxFields     int
 	maxArrayItems int
@@ -15,7 +17,7 @@ type projectionBounds struct {
 
 func projectionBoundsFromEngineConfig(config EngineConfig) projectionBounds {
 	return projectionBounds{
-		maxBytes:      positiveOrDefault(config.MaxToolResultOutputBytes, 8192),
+		maxTokens:     positiveOrDefault(config.MaxToolResultOutputTokens, 8192),
 		maxDepth:      positiveOrDefault(config.MaxToolResultOutputDepth, 4),
 		maxFields:     positiveOrDefault(config.MaxToolResultOutputFields, 64),
 		maxArrayItems: positiveOrDefault(config.MaxToolResultOutputArrayItems, 32),
@@ -30,11 +32,11 @@ func positiveOrDefault(value int, fallback int) int {
 }
 
 func projectToolArguments(arguments map[string]any, bounds projectionBounds) map[string]any {
-	return projectBoundedMap(arguments, bounds, "tool arguments exceeded byte limit")
+	return projectBoundedMap(arguments, bounds, "tool arguments exceeded token limit")
 }
 
 func projectToolResultOutput(output map[string]any, bounds projectionBounds) map[string]any {
-	return projectBoundedMap(output, bounds, "tool result output exceeded byte limit")
+	return projectBoundedMap(output, bounds, "tool result output exceeded token limit")
 }
 
 func projectBoundedMap(values map[string]any, bounds projectionBounds, truncationMessage string) map[string]any {
@@ -47,8 +49,8 @@ func projectBoundedMap(values map[string]any, bounds projectionBounds, truncatio
 		return nil
 	}
 
-	data, err := json.Marshal(orderedMap(projected))
-	if err == nil && bounds.maxBytes > 0 && len(data) > bounds.maxBytes {
+	estimatedTokens, err := tokenestimate.EstimateStableJSON(orderedMap(projected))
+	if err == nil && bounds.maxTokens > 0 && estimatedTokens > bounds.maxTokens {
 		return map[string]any{
 			"_truncated": truncationMessage,
 		}

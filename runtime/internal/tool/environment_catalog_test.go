@@ -9,6 +9,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/tokenestimate"
 
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -338,10 +339,10 @@ func TestBuildTurnToolViewAppliesStableCountAdmission(t *testing.T) {
 	)
 
 	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
-		MaxToolCount:            2,
-		MaxToolDescriptionBytes: 64,
-		MaxToolSchemaBytes:      64,
-		MaxTotalToolSchemaBytes: 128,
+		MaxToolCount:             2,
+		MaxToolDescriptionTokens: 64,
+		MaxToolSchemaTokens:      64,
+		MaxTotalToolSchemaTokens: 128,
 	})
 
 	if got, want := toolNames(result.View.Available()), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
@@ -360,17 +361,19 @@ func TestBuildTurnToolViewAppliesStableCountAdmission(t *testing.T) {
 }
 
 func TestBuildTurnToolViewDropsOversizedDescriptionAndSchema(t *testing.T) {
+	oversizedDescription := strings.Repeat("d", 12)
+	oversizedSchema := `{"type":"object","properties":{"text":{"type":"string","description":"` + strings.Repeat("s", 24) + `"}}}`
 	catalog := mustEnvironmentCatalog(t,
-		capability("huge_description", strings.Repeat("d", 12), `{"type":"object"}`),
-		capability("huge_schema", "short", `{"type":"object","properties":{"text":{"type":"string","description":"`+strings.Repeat("s", 24)+`"}}}`),
+		capability("huge_description", oversizedDescription, `{"type":"object"}`),
+		capability("huge_schema", "short", oversizedSchema),
 		capability("ok", "short", `{"type":"object"}`),
 	)
 
 	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
-		MaxToolCount:            8,
-		MaxToolDescriptionBytes: 8,
-		MaxToolSchemaBytes:      32,
-		MaxTotalToolSchemaBytes: 256,
+		MaxToolCount:             8,
+		MaxToolDescriptionTokens: tokenestimate.EstimateText(oversizedDescription) - 1,
+		MaxToolSchemaTokens:      tokenestimate.EstimateText(oversizedSchema) - 1,
+		MaxTotalToolSchemaTokens: 256,
 	})
 
 	if got, want := toolNames(result.View.Available()), []string{"ok"}; !reflect.DeepEqual(got, want) {
@@ -399,17 +402,18 @@ func TestBuildTurnToolViewAppliesTotalSchemaGreedyAdmission(t *testing.T) {
 	)
 
 	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
-		MaxToolCount:            8,
-		MaxToolDescriptionBytes: 64,
-		MaxToolSchemaBytes:      128,
-		MaxTotalToolSchemaBytes: len(alphaSchema) + len(betaSchema),
+		MaxToolCount:             8,
+		MaxToolDescriptionTokens: 64,
+		MaxToolSchemaTokens:      128,
+		MaxTotalToolSchemaTokens: tokenestimate.EstimateText(alphaSchema) + tokenestimate.EstimateText(betaSchema),
 	})
 
 	if got, want := toolNames(result.View.Available()), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("admitted tool names = %v, want %v", got, want)
 	}
-	if result.Report.TotalSchemaBytes != len(alphaSchema)+len(betaSchema) {
-		t.Fatalf("TotalSchemaBytes = %d, want %d", result.Report.TotalSchemaBytes, len(alphaSchema)+len(betaSchema))
+	wantTotalSchemaEstimatedTokens := tokenestimate.EstimateText(alphaSchema) + tokenestimate.EstimateText(betaSchema)
+	if result.Report.TotalSchemaEstimatedTokens != wantTotalSchemaEstimatedTokens {
+		t.Fatalf("TotalSchemaEstimatedTokens = %d, want %d", result.Report.TotalSchemaEstimatedTokens, wantTotalSchemaEstimatedTokens)
 	}
 	assertToolAdmissionDrops(t, result.Report, []ToolAdmissionDrop{
 		{Name: "gamma", Reason: ToolDropReasonTotalSchemaBudgetExceeded},
@@ -424,10 +428,10 @@ func TestBuildTurnToolViewBoundsAdmissionDiagnostics(t *testing.T) {
 	catalog := mustEnvironmentCatalog(t, capabilities...)
 
 	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
-		MaxToolCount:            1,
-		MaxToolDescriptionBytes: 64,
-		MaxToolSchemaBytes:      64,
-		MaxTotalToolSchemaBytes: 1024,
+		MaxToolCount:             1,
+		MaxToolDescriptionTokens: 64,
+		MaxToolSchemaTokens:      64,
+		MaxTotalToolSchemaTokens: 1024,
 	})
 
 	if result.Report.DroppedToolCount != 24 {
@@ -458,10 +462,10 @@ func TestBuildTurnToolViewBoundsAcceptedDiagnostics(t *testing.T) {
 	catalog := mustEnvironmentCatalog(t, capabilities...)
 
 	result := catalog.BuildTurnToolView(ToolAdmissionConfig{
-		MaxToolCount:            32,
-		MaxToolDescriptionBytes: 64,
-		MaxToolSchemaBytes:      64,
-		MaxTotalToolSchemaBytes: 2048,
+		MaxToolCount:             32,
+		MaxToolDescriptionTokens: 64,
+		MaxToolSchemaTokens:      64,
+		MaxTotalToolSchemaTokens: 2048,
 	})
 
 	if result.Report.AcceptedToolCount != 20 {

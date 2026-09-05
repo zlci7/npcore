@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/tokenestimate"
 	"gameagent/runtime/internal/tool"
 )
 
@@ -14,23 +15,36 @@ type requestMessageForSizing struct {
 	ToolResults []model.ToolResult `json:"tool_results,omitempty"`
 }
 
-func MeasureRequest(req model.Request) RequestSizeSummary {
-	summary := RequestSizeSummary{
-		SystemBytes:   len([]byte(req.System)),
-		ToolsBytes:    sectionProxyBytes(req.Tools),
-		ControlsBytes: sectionProxyBytes(req.Controls),
+func EstimateRequestTokens(req model.Request) (RequestTokenSummary, error) {
+	toolsEstimatedTokens, err := estimateRequestSectionTokens(req.Tools)
+	if err != nil {
+		return RequestTokenSummary{}, err
 	}
-	summary.MessagesBytes, summary.UserMessageBytes = measureMessages(req.Messages)
-	summary.TotalBytes = summary.SystemBytes + summary.MessagesBytes + summary.ToolsBytes + summary.ControlsBytes
-	return summary
+	controlsEstimatedTokens, err := estimateRequestSectionTokens(req.Controls)
+	if err != nil {
+		return RequestTokenSummary{}, err
+	}
+	messagesEstimatedTokens, userMessageEstimatedTokens, err := measureMessages(req.Messages)
+	if err != nil {
+		return RequestTokenSummary{}, err
+	}
+	summary := RequestTokenSummary{
+		SystemEstimatedTokens:   tokenestimate.EstimateText(req.System),
+		ToolsEstimatedTokens:    toolsEstimatedTokens,
+		ControlsEstimatedTokens: controlsEstimatedTokens,
+	}
+	summary.MessagesEstimatedTokens = messagesEstimatedTokens
+	summary.UserMessageEstimatedTokens = userMessageEstimatedTokens
+	summary.TotalEstimatedTokens = summary.SystemEstimatedTokens + summary.MessagesEstimatedTokens + summary.ToolsEstimatedTokens + summary.ControlsEstimatedTokens
+	return summary, nil
 }
 
-func measureMessages(messages []model.Message) (int, int) {
+func measureMessages(messages []model.Message) (int, int, error) {
 	if len(messages) == 0 {
-		return 0, 0
+		return 0, 0, nil
 	}
 	items := make([]requestMessageForSizing, 0, len(messages))
-	userBytes := 0
+	userEstimatedTokens := 0
 	for _, message := range messages {
 		items = append(items, requestMessageForSizing{
 			Role:        message.Role,
@@ -39,20 +53,28 @@ func measureMessages(messages []model.Message) (int, int) {
 			ToolResults: message.ToolResults,
 		})
 		if message.Role == model.RoleUser {
-			userBytes += len([]byte(message.Content))
+			userEstimatedTokens += tokenestimate.EstimateText(message.Content)
 		}
 	}
-	return sectionProxyBytes(items), userBytes
+	messagesEstimatedTokens, err := estimateRequestSectionTokens(items)
+	if err != nil {
+		return 0, 0, err
+	}
+	return messagesEstimatedTokens, userEstimatedTokens, nil
 }
 
-func RequestSizeExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) bool {
-	if budget.MaxSystemBytes > 0 && summary.SystemBytes > budget.MaxSystemBytes {
+func estimateRequestSectionTokens(value any) (int, error) {
+	return tokenestimate.EstimateStableJSON(value)
+}
+
+func RequestEstimatedTokensExceedBudget(summary RequestTokenSummary, budget BudgetConfig) bool {
+	if budget.MaxSystemTokens > 0 && summary.SystemEstimatedTokens > budget.MaxSystemTokens {
 		return true
 	}
-	if budget.MaxUserMessageBytes > 0 && summary.UserMessageBytes > budget.MaxUserMessageBytes {
+	if budget.MaxUserMessageTokens > 0 && summary.UserMessageEstimatedTokens > budget.MaxUserMessageTokens {
 		return true
 	}
-	if budget.MaxRequestBytes > 0 && summary.TotalBytes > budget.MaxRequestBytes {
+	if budget.MaxRequestTokens > 0 && summary.TotalEstimatedTokens > budget.MaxRequestTokens {
 		return true
 	}
 	return false
@@ -61,23 +83,23 @@ func RequestSizeExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) b
 // RequiredRequestSectionExceedsBudget is used after Engine has removed optional
 // projection content; a remaining system or user-message overflow means the
 // required request envelope still cannot fit the configured hard gate.
-func RequiredRequestSectionExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) bool {
-	if budget.MaxSystemBytes > 0 && summary.SystemBytes > budget.MaxSystemBytes {
+func RequiredRequestSectionExceedsBudget(summary RequestTokenSummary, budget BudgetConfig) bool {
+	if budget.MaxSystemTokens > 0 && summary.SystemEstimatedTokens > budget.MaxSystemTokens {
 		return true
 	}
-	return budget.MaxUserMessageBytes > 0 && summary.UserMessageBytes > budget.MaxUserMessageBytes
+	return budget.MaxUserMessageTokens > 0 && summary.UserMessageEstimatedTokens > budget.MaxUserMessageTokens
 }
 
-func RequestSizeBudgetError(summary RequestSizeSummary, budget BudgetConfig) error {
+func RequestTokenBudgetError(summary RequestTokenSummary, budget BudgetConfig) error {
 	return fmt.Errorf(
-		"%w: final model request exceeds byte budget (total=%d max_request=%d system=%d max_system=%d user=%d max_user=%d)",
+		"%w: final model request exceeds token budget (total=%d max_request=%d system=%d max_system=%d user=%d max_user=%d)",
 		ErrBudgetExceeded,
-		summary.TotalBytes,
-		budget.MaxRequestBytes,
-		summary.SystemBytes,
-		budget.MaxSystemBytes,
-		summary.UserMessageBytes,
-		budget.MaxUserMessageBytes,
+		summary.TotalEstimatedTokens,
+		budget.MaxRequestTokens,
+		summary.SystemEstimatedTokens,
+		budget.MaxSystemTokens,
+		summary.UserMessageEstimatedTokens,
+		budget.MaxUserMessageTokens,
 	)
 }
 
@@ -92,7 +114,7 @@ func ToolAdmissionSummaryFromReport(report tool.ToolAdmissionReport) ToolAdmissi
 		DroppedTools:                    append([]tool.ToolAdmissionDrop(nil), report.DroppedTools...),
 		DroppedToolsTruncatedCount:      report.DroppedToolsTruncatedCount,
 		DroppedReasonCounts:             copyStringIntMap(report.DroppedReasonCounts),
-		TotalSchemaBytes:                report.TotalSchemaBytes,
+		TotalSchemaEstimatedTokens:      report.TotalSchemaEstimatedTokens,
 	}
 }
 
@@ -112,7 +134,7 @@ func (r ContextBuildReport) WithToolAdmission(summary ToolAdmissionSummary) Cont
 	return r
 }
 
-func (r ContextBuildReport) WithFinalRequestSize(summary RequestSizeSummary) ContextBuildReport {
+func (r ContextBuildReport) WithFinalRequestSize(summary RequestTokenSummary) ContextBuildReport {
 	r.FinalRequestSize = summary
 	return r
 }

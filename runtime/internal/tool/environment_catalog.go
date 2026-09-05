@@ -9,6 +9,7 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/tokenestimate"
 )
 
 var (
@@ -32,10 +33,10 @@ type BootstrapDiagnostics struct {
 }
 
 type ToolAdmissionConfig struct {
-	MaxToolCount            int
-	MaxToolDescriptionBytes int
-	MaxToolSchemaBytes      int
-	MaxTotalToolSchemaBytes int
+	MaxToolCount             int
+	MaxToolDescriptionTokens int
+	MaxToolSchemaTokens      int
+	MaxTotalToolSchemaTokens int
 }
 
 type ToolAdmissionResult struct {
@@ -53,7 +54,7 @@ type ToolAdmissionReport struct {
 	DroppedTools                    []ToolAdmissionDrop
 	DroppedToolsTruncatedCount      int
 	DroppedReasonCounts             map[string]int
-	TotalSchemaBytes                int
+	TotalSchemaEstimatedTokens      int
 }
 
 type ToolAdmissionDrop struct {
@@ -69,10 +70,10 @@ const (
 
 	MaxToolAdmissionDiagnosticNames = 16
 
-	defaultMaxToolCount            = 64
-	defaultMaxToolDescriptionBytes = 2048
-	defaultMaxToolSchemaBytes      = 8192
-	defaultMaxTotalToolSchemaBytes = 32768
+	defaultMaxToolCount             = 64
+	defaultMaxToolDescriptionTokens = 2048
+	defaultMaxToolSchemaTokens      = 8192
+	defaultMaxTotalToolSchemaTokens = 32768
 )
 
 type EnvironmentToolCatalog struct {
@@ -173,34 +174,34 @@ func (c *EnvironmentToolCatalog) BuildTurnToolView(config ToolAdmissionConfig) T
 
 	admitted := make(map[string]Entry)
 	report := ToolAdmissionReport{}
-	totalSchemaBytes := 0
+	totalSchemaEstimatedTokens := 0
 
 	for _, name := range sortedMapKeys(c.tools) {
 		entry := c.tools[name]
-		descriptionBytes := len([]byte(entry.Definition.Description))
-		schemaBytes := len([]byte(entry.Definition.InputSchema))
+		descriptionEstimatedTokens := tokenestimate.EstimateText(entry.Definition.Description)
+		schemaEstimatedTokens := tokenestimate.EstimateText(entry.Definition.InputSchema)
 
 		switch {
-		case descriptionBytes > config.MaxToolDescriptionBytes:
+		case descriptionEstimatedTokens > config.MaxToolDescriptionTokens:
 			report.addDrop(name, ToolDropReasonDescriptionTooLarge)
 			continue
-		case schemaBytes > config.MaxToolSchemaBytes:
+		case schemaEstimatedTokens > config.MaxToolSchemaTokens:
 			report.addDrop(name, ToolDropReasonSchemaTooLarge)
 			continue
 		case len(admitted) >= config.MaxToolCount:
 			report.addDrop(name, ToolDropReasonCountExceeded)
 			continue
-		case totalSchemaBytes+schemaBytes > config.MaxTotalToolSchemaBytes:
+		case totalSchemaEstimatedTokens+schemaEstimatedTokens > config.MaxTotalToolSchemaTokens:
 			report.addDrop(name, ToolDropReasonTotalSchemaBudgetExceeded)
 			continue
 		}
 
 		admitted[name] = entry
-		totalSchemaBytes += schemaBytes
+		totalSchemaEstimatedTokens += schemaEstimatedTokens
 		report.addAccepted(name)
 	}
 
-	report.TotalSchemaBytes = totalSchemaBytes
+	report.TotalSchemaEstimatedTokens = totalSchemaEstimatedTokens
 	return ToolAdmissionResult{
 		View:   TurnToolView{tools: admitted},
 		Report: report,
@@ -290,9 +291,9 @@ func sortedMapKeys[V any](values map[string]V) []string {
 
 func (c ToolAdmissionConfig) withDefaults() ToolAdmissionConfig {
 	c.MaxToolCount = positiveOrDefault(c.MaxToolCount, defaultMaxToolCount)
-	c.MaxToolDescriptionBytes = positiveOrDefault(c.MaxToolDescriptionBytes, defaultMaxToolDescriptionBytes)
-	c.MaxToolSchemaBytes = positiveOrDefault(c.MaxToolSchemaBytes, defaultMaxToolSchemaBytes)
-	c.MaxTotalToolSchemaBytes = positiveOrDefault(c.MaxTotalToolSchemaBytes, defaultMaxTotalToolSchemaBytes)
+	c.MaxToolDescriptionTokens = positiveOrDefault(c.MaxToolDescriptionTokens, defaultMaxToolDescriptionTokens)
+	c.MaxToolSchemaTokens = positiveOrDefault(c.MaxToolSchemaTokens, defaultMaxToolSchemaTokens)
+	c.MaxTotalToolSchemaTokens = positiveOrDefault(c.MaxTotalToolSchemaTokens, defaultMaxTotalToolSchemaTokens)
 	return c
 }
 

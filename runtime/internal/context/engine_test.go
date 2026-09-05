@@ -64,15 +64,15 @@ func TestEngineBuildCreatesContextProjectionFromValidatedInput(t *testing.T) {
 
 func TestEngineBuildReturnsReportWithEffectiveBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MemoryContextSizeLimit:   123,
-		MaxRequestBytes:          4096,
-		MaxSystemBytes:           512,
-		MaxUserMessageBytes:      2048,
-		MaxToolCount:             3,
-		MaxToolDescriptionBytes:  64,
-		MaxToolSchemaBytes:       128,
-		MaxTotalToolSchemaBytes:  256,
-		MaxToolResultOutputBytes: 300,
+		MemoryContextSizeLimit:    123,
+		MaxRequestTokens:          4096,
+		MaxSystemTokens:           512,
+		MaxUserMessageTokens:      2048,
+		MaxToolCount:              3,
+		MaxToolDescriptionTokens:  64,
+		MaxToolSchemaTokens:       128,
+		MaxTotalToolSchemaTokens:  256,
+		MaxToolResultOutputTokens: 300,
 	})
 
 	result, err := engine.Build(validEngineInput(t))
@@ -84,17 +84,17 @@ func TestEngineBuildReturnsReportWithEffectiveBudget(t *testing.T) {
 	}
 
 	budget := result.Report.EffectiveBudget
-	if budget.MaxRecentMemoryBytes != 123 {
-		t.Fatalf("MaxRecentMemoryBytes = %d, want legacy MemoryContextSizeLimit mapping to 123", budget.MaxRecentMemoryBytes)
+	if budget.MaxRecentMemoryTokens != 123 {
+		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy MemoryContextSizeLimit mapping to 123", budget.MaxRecentMemoryTokens)
 	}
-	if budget.MaxRequestBytes != 4096 ||
-		budget.MaxSystemBytes != 512 ||
-		budget.MaxUserMessageBytes != 2048 ||
+	if budget.MaxRequestTokens != 4096 ||
+		budget.MaxSystemTokens != 512 ||
+		budget.MaxUserMessageTokens != 2048 ||
 		budget.MaxToolCount != 3 ||
-		budget.MaxToolDescriptionBytes != 64 ||
-		budget.MaxToolSchemaBytes != 128 ||
-		budget.MaxTotalToolSchemaBytes != 256 ||
-		budget.MaxToolResultOutputBytes != 300 {
+		budget.MaxToolDescriptionTokens != 64 ||
+		budget.MaxToolSchemaTokens != 128 ||
+		budget.MaxTotalToolSchemaTokens != 256 ||
+		budget.MaxToolResultOutputTokens != 300 {
 		t.Fatalf("EffectiveBudget did not preserve configured limits: %+v", budget)
 	}
 	if !result.Report.Sections.Has("current_event") {
@@ -647,7 +647,7 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 		t.Fatalf("latest-only Build returned error: %v", err)
 	}
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MemoryContextSizeLimit: reportSectionProxyBytes(t, latestOnly.Report, "recent_memory"),
+		MemoryContextSizeLimit: reportSectionProjectionEstimatedTokens(t, latestOnly.Report, "recent_memory"),
 	})
 
 	result, err := engine.Build(input)
@@ -667,7 +667,7 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 func TestEngineBuildProjectsBoundedRecentMemoryToolArguments(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
 		MemoryContextSizeLimit:        4096,
-		MaxToolResultOutputBytes:      300,
+		MaxToolResultOutputTokens:     300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,
@@ -702,7 +702,7 @@ func TestEngineBuildProjectsBoundedRecentMemoryToolArguments(t *testing.T) {
 
 func TestEngineBuildProjectsCurrentTurnTranscriptWithBounds(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
-		MaxToolResultOutputBytes:      300,
+		MaxToolResultOutputTokens:     300,
 		MaxToolResultOutputDepth:      2,
 		MaxToolResultOutputFields:     2,
 		MaxToolResultOutputArrayItems: 2,
@@ -796,7 +796,7 @@ func TestEngineBuildReportsMemoryBudgetWithoutDroppingRequiredProjection(t *test
 		t.Fatalf("latest-only Build returned error: %v", err)
 	}
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRecentMemoryBytes: reportSectionProxyBytes(t, latestOnly.Report, "recent_memory"),
+		MaxRecentMemoryTokens: reportSectionProjectionEstimatedTokens(t, latestOnly.Report, "recent_memory"),
 	})
 
 	result, err := engine.Build(input)
@@ -829,7 +829,7 @@ func TestEngineBuildReportsMemoryBudgetWithoutDroppingRequiredProjection(t *test
 }
 
 func TestEngineBuildDropsNewestMemoryWhenItExceedsMemoryBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxRecentMemoryBytes: 80})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxRecentMemoryTokens: 80})
 	input := validEngineInput(t)
 	input.RecentMemories = []memory.Record{{
 		MemoryID: "oversized-newest",
@@ -855,7 +855,7 @@ func TestEngineBuildDropsNewestMemoryWhenItExceedsMemoryBudget(t *testing.T) {
 	}
 }
 
-func TestEngineBuildAppliesRecentMemoryBudgetUsingProxyBytes(t *testing.T) {
+func TestEngineBuildAppliesRecentMemoryBudgetUsingProjectionEstimatedTokens(t *testing.T) {
 	input := validEngineInput(t)
 	input.RecentMemories = []memory.Record{{
 		MemoryID: "new",
@@ -870,13 +870,13 @@ func TestEngineBuildAppliesRecentMemoryBudgetUsingProxyBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baseline Build returned error: %v", err)
 	}
-	proxyBytes := reportSectionProxyBytes(t, baseline.Report, "recent_memory")
+	proxyBytes := reportSectionProjectionEstimatedTokens(t, baseline.Report, "recent_memory")
 	if proxyBytes <= 1 {
 		t.Fatalf("recent_memory proxy bytes = %d, want > 1", proxyBytes)
 	}
 
 	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRecentMemoryBytes: proxyBytes - 1,
+		MaxRecentMemoryTokens: proxyBytes - 1,
 	}).Build(input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -890,7 +890,7 @@ func TestEngineBuildAppliesRecentMemoryBudgetUsingProxyBytes(t *testing.T) {
 }
 
 func TestEngineBuildAppliesSharedDefinitionBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionBytes: 260})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionTokens: 260})
 	input := validEngineInput(t)
 	input.AgentDefinition.Identity = "agent-core"
 	input.AgentDefinition.Personality = []string{
@@ -942,17 +942,6 @@ func TestEngineBuildAppliesSharedDefinitionBudget(t *testing.T) {
 }
 
 func TestEngineBuildGloballyTrimsOptionalContextToFitRequestBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRequestBytes:          2400,
-		MaxUserMessageBytes:      2200,
-		MaxDefinitionBytes:       4096,
-		MaxObservationBytes:      4096,
-		MaxEventBytes:            4096,
-		MaxContextFactsBytes:     4096,
-		MaxRecentMemoryBytes:     4096,
-		MaxTranscriptBytes:       4096,
-		MaxToolResultOutputBytes: 4096,
-	})
 	input := validEngineInput(t)
 	input.AgentDefinition.Identity = "agent-core"
 	input.Event.Payload = mustStruct(t, map[string]any{"dialogue_id": "intro"})
@@ -1004,6 +993,36 @@ func TestEngineBuildGloballyTrimsOptionalContextToFitRequestBudget(t *testing.T)
 		},
 	}
 
+	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestTokens:          262144,
+		MaxUserMessageTokens:      262144,
+		MaxDefinitionTokens:       262144,
+		MaxObservationTokens:      262144,
+		MaxEventTokens:            262144,
+		MaxContextFactsTokens:     262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("baseline Build returned error: %v", err)
+	}
+	latestWithoutMemory := baseline.Projection
+	latestWithoutMemory.RecentMemory = nil
+	latestWithoutMemory.CurrentTurnTranscript = baseline.Projection.CurrentTurnTranscript[2:]
+	fitSize := measureProjectionForTest(t, latestWithoutMemory)
+
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestTokens:          fitSize.TotalEstimatedTokens,
+		MaxUserMessageTokens:      262144,
+		MaxDefinitionTokens:       262144,
+		MaxObservationTokens:      262144,
+		MaxEventTokens:            262144,
+		MaxContextFactsTokens:     262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
+	})
 	result, err := engine.Build(input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -1012,8 +1031,8 @@ func TestEngineBuildGloballyTrimsOptionalContextToFitRequestBudget(t *testing.T)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
-	size := agentcontext.MeasureRequest(req)
-	if agentcontext.RequestSizeExceedsBudget(size, result.Report.EffectiveBudget) {
+	size := estimateRequestTokensForTest(t, req)
+	if agentcontext.RequestEstimatedTokensExceedBudget(size, result.Report.EffectiveBudget) {
 		t.Fatalf("rendered request still exceeds budget: size=%+v budget=%+v\n%s", size, result.Report.EffectiveBudget, req.Messages[0].Content)
 	}
 	content := renderRequestText(req)
@@ -1085,11 +1104,11 @@ func TestEngineBuildTrimsOlderTranscriptBeforeRecentMemoryUnderGlobalBudget(t *t
 	}
 
 	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRequestBytes:          262144,
-		MaxUserMessageBytes:      262144,
-		MaxRecentMemoryBytes:     262144,
-		MaxTranscriptBytes:       262144,
-		MaxToolResultOutputBytes: 262144,
+		MaxRequestTokens:          262144,
+		MaxUserMessageTokens:      262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
 	}).Build(input)
 	if err != nil {
 		t.Fatalf("baseline Build returned error: %v", err)
@@ -1104,17 +1123,17 @@ func TestEngineBuildTrimsOlderTranscriptBeforeRecentMemoryUnderGlobalBudget(t *t
 	withoutMemory.RecentMemory = nil
 	afterMemoryDrop := measureProjectionForTest(t, withoutMemory)
 
-	budget := maxInt(afterTranscriptTrim.TotalBytes, afterMemoryDrop.TotalBytes)
-	if budget >= fullSize.TotalBytes {
+	budget := maxInt(afterTranscriptTrim.TotalEstimatedTokens, afterMemoryDrop.TotalEstimatedTokens)
+	if budget >= fullSize.TotalEstimatedTokens {
 		t.Fatalf("test setup did not create budget pressure: full=%+v after_transcript=%+v after_memory=%+v", fullSize, afterTranscriptTrim, afterMemoryDrop)
 	}
 
 	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRequestBytes:          budget,
-		MaxUserMessageBytes:      262144,
-		MaxRecentMemoryBytes:     262144,
-		MaxTranscriptBytes:       262144,
-		MaxToolResultOutputBytes: 262144,
+		MaxRequestTokens:          budget,
+		MaxUserMessageTokens:      262144,
+		MaxRecentMemoryTokens:     262144,
+		MaxTranscriptTokens:       262144,
+		MaxToolResultOutputTokens: 262144,
 	}).Build(input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -1140,7 +1159,7 @@ func TestEngineBuildTrimsOlderTranscriptBeforeRecentMemoryUnderGlobalBudget(t *t
 }
 
 func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionBytes: 1})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionTokens: 1})
 	input := validEngineInput(t)
 
 	result, err := engine.Build(input)
@@ -1158,10 +1177,10 @@ func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T
 
 func TestEngineBuildCropsStructuredSectionsWithoutInvalidJSON(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxEventBytes:            512,
-		MaxObservationBytes:      256,
-		MaxContextFactsBytes:     256,
-		MaxToolResultOutputBytes: 256,
+		MaxEventTokens:            180,
+		MaxObservationTokens:      80,
+		MaxContextFactsTokens:     120,
+		MaxToolResultOutputTokens: 256,
 	})
 	input := validEngineInput(t)
 	input.Event.Payload = mustStruct(t, map[string]any{
@@ -1222,9 +1241,9 @@ func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(
 	if err != nil {
 		t.Fatalf("baseline Build returned error: %v", err)
 	}
-	eventShellBytes := reportSectionProxyBytes(t, baseline.Report, "current_event")
+	eventShellBytes := reportSectionProjectionEstimatedTokens(t, baseline.Report, "current_event")
 
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventBytes: eventShellBytes})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventTokens: eventShellBytes})
 	input := validEngineInput(t)
 	input.Event.Payload = mustStruct(t, map[string]any{
 		"large": strings.Repeat("event-secret", 40),
@@ -1237,7 +1256,7 @@ func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(
 	if len(result.Projection.CurrentEvent.Payload) != 0 {
 		t.Fatalf("CurrentEvent.Payload = %+v, want dropped optional payload", result.Projection.CurrentEvent.Payload)
 	}
-	if got := reportSectionProxyBytes(t, result.Report, "current_event"); got > eventShellBytes {
+	if got := reportSectionProjectionEstimatedTokens(t, result.Report, "current_event"); got > eventShellBytes {
 		t.Fatalf("current_event proxy bytes = %d, want <= %d", got, eventShellBytes)
 	}
 	if !reportHasReason(result.Report, agentcontext.ReasonEventBudgetExceeded) {
@@ -1250,7 +1269,7 @@ func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(
 }
 
 func TestEngineBuildFailsWhenRequiredEventShellExceedsSectionBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventBytes: 1})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventTokens: 1})
 	input := validEngineInput(t)
 	input.Event.Payload = mustStruct(t, map[string]any{
 		"large": strings.Repeat("event-secret", 40),
@@ -1268,7 +1287,7 @@ func TestEngineBuildFailsWhenRequiredEventShellExceedsSectionBudget(t *testing.T
 }
 
 func TestEngineBuildPreservesLatestTranscriptCausalGroupWithinBudget(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxTranscriptBytes: 512})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxTranscriptTokens: 512})
 	input := validEngineInput(t)
 	input.Transcript = []model.Message{
 		{
@@ -1331,8 +1350,8 @@ func TestEngineBuildPreservesLatestTranscriptCausalGroupWithinBudget(t *testing.
 
 func TestEngineBuildFailsWhenLatestTranscriptCausalGroupExceedsBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxTranscriptBytes:       64,
-		MaxToolResultOutputBytes: 4096,
+		MaxTranscriptTokens:       64,
+		MaxToolResultOutputTokens: 4096,
 	})
 	input := validEngineInput(t)
 	input.Transcript = []model.Message{
@@ -1461,7 +1480,7 @@ func TestEngineBuildAcceptsTranscriptResultsMatchedByIDOutOfOrder(t *testing.T) 
 	}
 }
 
-func TestMeasureRequestIsDeterministicForFixedRequest(t *testing.T) {
+func TestEstimateRequestTokensIsDeterministicForFixedRequest(t *testing.T) {
 	req := model.Request{
 		System: "policy",
 		Messages: []model.Message{
@@ -1489,15 +1508,15 @@ func TestMeasureRequestIsDeterministicForFixedRequest(t *testing.T) {
 		}},
 	}
 
-	first := agentcontext.MeasureRequest(req)
-	second := agentcontext.MeasureRequest(req)
+	first := estimateRequestTokensForTest(t, req)
+	second := estimateRequestTokensForTest(t, req)
 	if first != second {
-		t.Fatalf("MeasureRequest was not deterministic:\nfirst=%+v\nsecond=%+v", first, second)
+		t.Fatalf("EstimateRequestTokens was not deterministic:\nfirst=%+v\nsecond=%+v", first, second)
 	}
-	if first.UserMessageBytes != len([]byte("rendered context")) {
-		t.Fatalf("UserMessageBytes = %d, want rendered user content bytes", first.UserMessageBytes)
+	if first.UserMessageEstimatedTokens != 4 {
+		t.Fatalf("UserMessageEstimatedTokens = %d, want rendered user content estimated tokens", first.UserMessageEstimatedTokens)
 	}
-	if first.TotalBytes <= 0 || !agentcontext.RequestSizeExceedsBudget(first, agentcontext.BudgetConfig{MaxRequestBytes: first.TotalBytes - 1}.WithDefaults()) {
+	if first.TotalEstimatedTokens <= 0 || !agentcontext.RequestEstimatedTokensExceedBudget(first, agentcontext.BudgetConfig{MaxRequestTokens: first.TotalEstimatedTokens - 1}.WithDefaults()) {
 		t.Fatalf("request sizing did not enforce total budget: %+v", first)
 	}
 }
@@ -1588,14 +1607,24 @@ func renderRequestText(req model.Request) string {
 	return strings.Join(parts, "\n")
 }
 
-func measureProjectionForTest(t *testing.T, projection agentcontext.ContextProjection) agentcontext.RequestSizeSummary {
+func measureProjectionForTest(t *testing.T, projection agentcontext.ContextProjection) agentcontext.RequestTokenSummary {
 	t.Helper()
 
 	req, err := agentcontext.NewRenderer().Render(projection)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
-	return agentcontext.MeasureRequest(req)
+	return estimateRequestTokensForTest(t, req)
+}
+
+func estimateRequestTokensForTest(t *testing.T, req model.Request) agentcontext.RequestTokenSummary {
+	t.Helper()
+
+	size, err := agentcontext.EstimateRequestTokens(req)
+	if err != nil {
+		t.Fatalf("EstimateRequestTokens returned error: %v", err)
+	}
+	return size
 }
 
 func maxInt(left int, right int) int {
@@ -1614,12 +1643,12 @@ func reportHasReason(report agentcontext.ContextBuildReport, reason string) bool
 	return false
 }
 
-func reportSectionProxyBytes(t *testing.T, report agentcontext.ContextBuildReport, name string) int {
+func reportSectionProjectionEstimatedTokens(t *testing.T, report agentcontext.ContextBuildReport, name string) int {
 	t.Helper()
 
 	for _, section := range report.Sections {
 		if section.Name == name {
-			return section.ProxyBytes
+			return section.ProjectionEstimatedTokens
 		}
 	}
 	t.Fatalf("section %q not found in %+v", name, report.Sections)

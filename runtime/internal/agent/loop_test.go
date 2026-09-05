@@ -654,7 +654,7 @@ func TestHandleEventFailsBeforeProviderWhenRequestHardLimitExceeded(t *testing.T
 	recorder := &recordingTraceRecorder{}
 	provider := &recordingProvider{}
 	config := agent.DefaultConfig()
-	config.MaxSystemBytes = 1
+	config.MaxSystemTokens = 1
 	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
@@ -925,9 +925,9 @@ func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	config := agent.DefaultConfig()
 	config.RecentMemoryLimit = 25
 	config.MemoryContextSizeLimit = 65536
-	config.MaxRecentMemoryBytes = 65536
-	config.MaxRequestBytes = 262144
-	config.MaxUserMessageBytes = 262144
+	config.MaxRecentMemoryTokens = 65536
+	config.MaxRequestTokens = 262144
+	config.MaxUserMessageTokens = 262144
 	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}

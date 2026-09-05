@@ -91,12 +91,12 @@ func trimMemoryProjections(projections []MemoryProjection, limit int) []MemoryPr
 	}
 
 	start := len(projections) - 1
-	if sectionProxyBytes(projections[start:]) > limit {
+	if sectionProjectionEstimatedTokens(projections[start:]) > limit {
 		return nil
 	}
 	for start > 0 {
 		nextStart := start - 1
-		if sectionProxyBytes(projections[nextStart:]) > limit {
+		if sectionProjectionEstimatedTokens(projections[nextStart:]) > limit {
 			break
 		}
 		start = nextStart

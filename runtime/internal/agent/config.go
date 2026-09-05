@@ -31,20 +31,20 @@ type Config struct {
 	MaxToolCallsPerTurn           int
 	MaxAsyncActionsPerTurn        int
 	MaxParallelToolCalls          int
-	MaxRequestBytes               int
-	MaxSystemBytes                int
-	MaxUserMessageBytes           int
-	MaxDefinitionBytes            int
-	MaxObservationBytes           int
-	MaxEventBytes                 int
-	MaxContextFactsBytes          int
-	MaxRecentMemoryBytes          int
-	MaxTranscriptBytes            int
+	MaxRequestTokens               int
+	MaxSystemTokens                int
+	MaxUserMessageTokens           int
+	MaxDefinitionTokens            int
+	MaxObservationTokens           int
+	MaxEventTokens                 int
+	MaxContextFactsTokens          int
+	MaxRecentMemoryTokens          int
+	MaxTranscriptTokens            int
 	MaxToolCount                  int
-	MaxToolDescriptionBytes       int
-	MaxToolSchemaBytes            int
-	MaxTotalToolSchemaBytes       int
-	MaxToolResultOutputBytes      int
+	MaxToolDescriptionTokens       int
+	MaxToolSchemaTokens            int
+	MaxTotalToolSchemaTokens       int
+	MaxToolResultOutputTokens      int
 	MaxToolResultOutputDepth      int
 	MaxToolResultOutputFields     int
 	MaxToolResultOutputArrayItems int
@@ -67,20 +67,20 @@ type fileConfig struct {
 	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
 	MaxAsyncActionsPerTurn        int          `json:"max_async_actions_per_turn"`
 	MaxParallelToolCalls          int          `json:"max_parallel_tool_calls"`
-	MaxRequestBytes               int          `json:"max_request_bytes"`
-	MaxSystemBytes                int          `json:"max_system_bytes"`
-	MaxUserMessageBytes           int          `json:"max_user_message_bytes"`
-	MaxDefinitionBytes            int          `json:"max_definition_bytes"`
-	MaxObservationBytes           int          `json:"max_observation_bytes"`
-	MaxEventBytes                 int          `json:"max_event_bytes"`
-	MaxContextFactsBytes          int          `json:"max_context_facts_bytes"`
-	MaxRecentMemoryBytes          int          `json:"max_recent_memory_bytes"`
-	MaxTranscriptBytes            int          `json:"max_transcript_bytes"`
+	MaxRequestTokens               int          `json:"max_request_bytes"`
+	MaxSystemTokens                int          `json:"max_system_bytes"`
+	MaxUserMessageTokens           int          `json:"max_user_message_bytes"`
+	MaxDefinitionTokens            int          `json:"max_definition_bytes"`
+	MaxObservationTokens           int          `json:"max_observation_bytes"`
+	MaxEventTokens                 int          `json:"max_event_bytes"`
+	MaxContextFactsTokens          int          `json:"max_context_facts_bytes"`
+	MaxRecentMemoryTokens          int          `json:"max_recent_memory_bytes"`
+	MaxTranscriptTokens            int          `json:"max_transcript_bytes"`
 	MaxToolCount                  int          `json:"max_tool_count"`
-	MaxToolDescriptionBytes       int          `json:"max_tool_description_bytes"`
-	MaxToolSchemaBytes            int          `json:"max_tool_schema_bytes"`
-	MaxTotalToolSchemaBytes       int          `json:"max_total_tool_schema_bytes"`
-	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
+	MaxToolDescriptionTokens       int          `json:"max_tool_description_bytes"`
+	MaxToolSchemaTokens            int          `json:"max_tool_schema_bytes"`
+	MaxTotalToolSchemaTokens       int          `json:"max_total_tool_schema_bytes"`
+	MaxToolResultOutputTokens      int          `json:"max_tool_result_output_bytes"`
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
 	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
 	MaxToolResultOutputArrayItems int          `json:"max_tool_result_output_array_items"`
@@ -114,20 +114,20 @@ func DefaultConfig() Config {
 		MaxToolCallsPerTurn:           6,
 		MaxAsyncActionsPerTurn:        1,
 		MaxParallelToolCalls:          4,
-		MaxRequestBytes:               budget.MaxRequestBytes,
-		MaxSystemBytes:                budget.MaxSystemBytes,
-		MaxUserMessageBytes:           budget.MaxUserMessageBytes,
-		MaxDefinitionBytes:            budget.MaxDefinitionBytes,
-		MaxObservationBytes:           budget.MaxObservationBytes,
-		MaxEventBytes:                 budget.MaxEventBytes,
-		MaxContextFactsBytes:          budget.MaxContextFactsBytes,
-		MaxRecentMemoryBytes:          budget.MaxRecentMemoryBytes,
-		MaxTranscriptBytes:            budget.MaxTranscriptBytes,
+		MaxRequestTokens:               budget.MaxRequestTokens,
+		MaxSystemTokens:                budget.MaxSystemTokens,
+		MaxUserMessageTokens:           budget.MaxUserMessageTokens,
+		MaxDefinitionTokens:            budget.MaxDefinitionTokens,
+		MaxObservationTokens:           budget.MaxObservationTokens,
+		MaxEventTokens:                 budget.MaxEventTokens,
+		MaxContextFactsTokens:          budget.MaxContextFactsTokens,
+		MaxRecentMemoryTokens:          budget.MaxRecentMemoryTokens,
+		MaxTranscriptTokens:            budget.MaxTranscriptTokens,
 		MaxToolCount:                  budget.MaxToolCount,
-		MaxToolDescriptionBytes:       budget.MaxToolDescriptionBytes,
-		MaxToolSchemaBytes:            budget.MaxToolSchemaBytes,
-		MaxTotalToolSchemaBytes:       budget.MaxTotalToolSchemaBytes,
-		MaxToolResultOutputBytes:      budget.MaxToolResultOutputBytes,
+		MaxToolDescriptionTokens:       budget.MaxToolDescriptionTokens,
+		MaxToolSchemaTokens:            budget.MaxToolSchemaTokens,
+		MaxTotalToolSchemaTokens:       budget.MaxTotalToolSchemaTokens,
+		MaxToolResultOutputTokens:      budget.MaxToolResultOutputTokens,
 		MaxToolResultOutputDepth:      budget.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     budget.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: budget.MaxToolResultOutputArrayItems,
@@ -181,20 +181,20 @@ func LoadConfigFile(path string) (Config, error) {
 		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
 		MaxAsyncActionsPerTurn:        raw.MaxAsyncActionsPerTurn,
 		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
-		MaxRequestBytes:               raw.MaxRequestBytes,
-		MaxSystemBytes:                raw.MaxSystemBytes,
-		MaxUserMessageBytes:           raw.MaxUserMessageBytes,
-		MaxDefinitionBytes:            raw.MaxDefinitionBytes,
-		MaxObservationBytes:           raw.MaxObservationBytes,
-		MaxEventBytes:                 raw.MaxEventBytes,
-		MaxContextFactsBytes:          raw.MaxContextFactsBytes,
-		MaxRecentMemoryBytes:          raw.MaxRecentMemoryBytes,
-		MaxTranscriptBytes:            raw.MaxTranscriptBytes,
+		MaxRequestTokens:               raw.MaxRequestTokens,
+		MaxSystemTokens:                raw.MaxSystemTokens,
+		MaxUserMessageTokens:           raw.MaxUserMessageTokens,
+		MaxDefinitionTokens:            raw.MaxDefinitionTokens,
+		MaxObservationTokens:           raw.MaxObservationTokens,
+		MaxEventTokens:                 raw.MaxEventTokens,
+		MaxContextFactsTokens:          raw.MaxContextFactsTokens,
+		MaxRecentMemoryTokens:          raw.MaxRecentMemoryTokens,
+		MaxTranscriptTokens:            raw.MaxTranscriptTokens,
 		MaxToolCount:                  raw.MaxToolCount,
-		MaxToolDescriptionBytes:       raw.MaxToolDescriptionBytes,
-		MaxToolSchemaBytes:            raw.MaxToolSchemaBytes,
-		MaxTotalToolSchemaBytes:       raw.MaxTotalToolSchemaBytes,
-		MaxToolResultOutputBytes:      raw.MaxToolResultOutputBytes,
+		MaxToolDescriptionTokens:       raw.MaxToolDescriptionTokens,
+		MaxToolSchemaTokens:            raw.MaxToolSchemaTokens,
+		MaxTotalToolSchemaTokens:       raw.MaxTotalToolSchemaTokens,
+		MaxToolResultOutputTokens:      raw.MaxToolResultOutputTokens,
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: raw.MaxToolResultOutputArrayItems,
@@ -282,53 +282,53 @@ func (c Config) WithDefaults() Config {
 	if c.MaxParallelToolCalls <= 0 {
 		c.MaxParallelToolCalls = defaults.MaxParallelToolCalls
 	}
-	if c.MaxRecentMemoryBytes <= 0 && c.MemoryContextSizeLimit > 0 {
-		c.MaxRecentMemoryBytes = c.MemoryContextSizeLimit
+	if c.MaxRecentMemoryTokens <= 0 && c.MemoryContextSizeLimit > 0 {
+		c.MaxRecentMemoryTokens = c.MemoryContextSizeLimit
 	}
-	if c.MaxRequestBytes <= 0 {
-		c.MaxRequestBytes = defaults.MaxRequestBytes
+	if c.MaxRequestTokens <= 0 {
+		c.MaxRequestTokens = defaults.MaxRequestTokens
 	}
-	if c.MaxSystemBytes <= 0 {
-		c.MaxSystemBytes = defaults.MaxSystemBytes
+	if c.MaxSystemTokens <= 0 {
+		c.MaxSystemTokens = defaults.MaxSystemTokens
 	}
-	if c.MaxUserMessageBytes <= 0 {
-		c.MaxUserMessageBytes = defaults.MaxUserMessageBytes
+	if c.MaxUserMessageTokens <= 0 {
+		c.MaxUserMessageTokens = defaults.MaxUserMessageTokens
 	}
-	if c.MaxDefinitionBytes <= 0 {
-		c.MaxDefinitionBytes = defaults.MaxDefinitionBytes
+	if c.MaxDefinitionTokens <= 0 {
+		c.MaxDefinitionTokens = defaults.MaxDefinitionTokens
 	}
-	if c.MaxObservationBytes <= 0 {
-		c.MaxObservationBytes = defaults.MaxObservationBytes
+	if c.MaxObservationTokens <= 0 {
+		c.MaxObservationTokens = defaults.MaxObservationTokens
 	}
-	if c.MaxEventBytes <= 0 {
-		c.MaxEventBytes = defaults.MaxEventBytes
+	if c.MaxEventTokens <= 0 {
+		c.MaxEventTokens = defaults.MaxEventTokens
 	}
-	if c.MaxContextFactsBytes <= 0 {
-		c.MaxContextFactsBytes = defaults.MaxContextFactsBytes
+	if c.MaxContextFactsTokens <= 0 {
+		c.MaxContextFactsTokens = defaults.MaxContextFactsTokens
 	}
-	if c.MaxRecentMemoryBytes <= 0 {
-		c.MaxRecentMemoryBytes = defaults.MaxRecentMemoryBytes
+	if c.MaxRecentMemoryTokens <= 0 {
+		c.MaxRecentMemoryTokens = defaults.MaxRecentMemoryTokens
 	}
 	if c.MemoryContextSizeLimit <= 0 {
-		c.MemoryContextSizeLimit = c.MaxRecentMemoryBytes
+		c.MemoryContextSizeLimit = c.MaxRecentMemoryTokens
 	}
-	if c.MaxTranscriptBytes <= 0 {
-		c.MaxTranscriptBytes = defaults.MaxTranscriptBytes
+	if c.MaxTranscriptTokens <= 0 {
+		c.MaxTranscriptTokens = defaults.MaxTranscriptTokens
 	}
 	if c.MaxToolCount <= 0 {
 		c.MaxToolCount = defaults.MaxToolCount
 	}
-	if c.MaxToolDescriptionBytes <= 0 {
-		c.MaxToolDescriptionBytes = defaults.MaxToolDescriptionBytes
+	if c.MaxToolDescriptionTokens <= 0 {
+		c.MaxToolDescriptionTokens = defaults.MaxToolDescriptionTokens
 	}
-	if c.MaxToolSchemaBytes <= 0 {
-		c.MaxToolSchemaBytes = defaults.MaxToolSchemaBytes
+	if c.MaxToolSchemaTokens <= 0 {
+		c.MaxToolSchemaTokens = defaults.MaxToolSchemaTokens
 	}
-	if c.MaxTotalToolSchemaBytes <= 0 {
-		c.MaxTotalToolSchemaBytes = defaults.MaxTotalToolSchemaBytes
+	if c.MaxTotalToolSchemaTokens <= 0 {
+		c.MaxTotalToolSchemaTokens = defaults.MaxTotalToolSchemaTokens
 	}
-	if c.MaxToolResultOutputBytes <= 0 {
-		c.MaxToolResultOutputBytes = defaults.MaxToolResultOutputBytes
+	if c.MaxToolResultOutputTokens <= 0 {
+		c.MaxToolResultOutputTokens = defaults.MaxToolResultOutputTokens
 	}
 	if c.MaxToolResultOutputDepth <= 0 {
 		c.MaxToolResultOutputDepth = defaults.MaxToolResultOutputDepth

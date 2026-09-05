@@ -116,20 +116,20 @@ func NewLoop(modelProvider model.Provider, recorder trace.Recorder, config Confi
 		memoryProjector: memory.NewProjector(nil),
 		contextEngine: agentcontext.NewEngine(agentcontext.EngineConfig{
 			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
-			MaxRequestBytes:               config.MaxRequestBytes,
-			MaxSystemBytes:                config.MaxSystemBytes,
-			MaxUserMessageBytes:           config.MaxUserMessageBytes,
-			MaxDefinitionBytes:            config.MaxDefinitionBytes,
-			MaxObservationBytes:           config.MaxObservationBytes,
-			MaxEventBytes:                 config.MaxEventBytes,
-			MaxContextFactsBytes:          config.MaxContextFactsBytes,
-			MaxRecentMemoryBytes:          config.MaxRecentMemoryBytes,
-			MaxTranscriptBytes:            config.MaxTranscriptBytes,
+			MaxRequestTokens:              config.MaxRequestTokens,
+			MaxSystemTokens:               config.MaxSystemTokens,
+			MaxUserMessageTokens:          config.MaxUserMessageTokens,
+			MaxDefinitionTokens:           config.MaxDefinitionTokens,
+			MaxObservationTokens:          config.MaxObservationTokens,
+			MaxEventTokens:                config.MaxEventTokens,
+			MaxContextFactsTokens:         config.MaxContextFactsTokens,
+			MaxRecentMemoryTokens:         config.MaxRecentMemoryTokens,
+			MaxTranscriptTokens:           config.MaxTranscriptTokens,
 			MaxToolCount:                  config.MaxToolCount,
-			MaxToolDescriptionBytes:       config.MaxToolDescriptionBytes,
-			MaxToolSchemaBytes:            config.MaxToolSchemaBytes,
-			MaxTotalToolSchemaBytes:       config.MaxTotalToolSchemaBytes,
-			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
+			MaxToolDescriptionTokens:      config.MaxToolDescriptionTokens,
+			MaxToolSchemaTokens:           config.MaxToolSchemaTokens,
+			MaxTotalToolSchemaTokens:      config.MaxTotalToolSchemaTokens,
+			MaxToolResultOutputTokens:     config.MaxToolResultOutputTokens,
 			MaxToolResultOutputDepth:      config.MaxToolResultOutputDepth,
 			MaxToolResultOutputFields:     config.MaxToolResultOutputFields,
 			MaxToolResultOutputArrayItems: config.MaxToolResultOutputArrayItems,
@@ -209,7 +209,7 @@ func (l *Loop) HandleEvent(
 			"dropped_tool_names":                 append([]string(nil), toolAdmission.Report.DroppedToolNames...),
 			"dropped_tool_names_truncated_count": toolAdmission.Report.DroppedToolNamesTruncatedCount,
 			"dropped_tool_reason_counts":         copyStringIntMap(toolAdmission.Report.DroppedReasonCounts),
-			"tool_schema_total_bytes":            toolAdmission.Report.TotalSchemaBytes,
+			"tool_schema_total_estimated_tokens": toolAdmission.Report.TotalSchemaEstimatedTokens,
 		},
 	})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
@@ -274,12 +274,12 @@ func (l *Loop) runBoundedSteps(
 		})
 		turnTracer.Emit(trace.EventModelRequestStarted, trace.EventData{
 			Fields: trace.Fields{
-				"tool_count":          len(req.Tools),
-				"step_index":          stepIndex,
-				"transcript":          len(transcript),
-				"max_steps":           l.config.MaxSteps,
-				"turn_budget":         l.config.MaxToolCallsPerTurn,
-				"request_total_bytes": buildReport.FinalRequestSize.TotalBytes,
+				"tool_count":                     len(req.Tools),
+				"step_index":                     stepIndex,
+				"transcript":                     len(transcript),
+				"max_steps":                      l.config.MaxSteps,
+				"turn_budget":                    l.config.MaxToolCallsPerTurn,
+				"request_total_estimated_tokens": buildReport.FinalRequestSize.TotalEstimatedTokens,
 			},
 		})
 		modelCtx, cancelLLM := context.WithTimeout(ctx, l.config.LLMTimeout)
@@ -619,9 +619,12 @@ func (l *Loop) buildModelRequest(
 	if err != nil {
 		return model.Request{}, report, err
 	}
-	size := agentcontext.MeasureRequest(req)
+	size, err := agentcontext.EstimateRequestTokens(req)
+	if err != nil {
+		return model.Request{}, report, err
+	}
 	report = report.WithFinalRequestSize(size)
-	if agentcontext.RequestSizeExceedsBudget(size, report.EffectiveBudget) {
+	if agentcontext.RequestEstimatedTokensExceedBudget(size, report.EffectiveBudget) {
 		// Engine should already fit successful projections to the request
 		// budget. Keep this renderer-side hard gate as the final defense if
 		// request formatting, tools, or controls change later.
@@ -629,7 +632,7 @@ func (l *Loop) buildModelRequest(
 		if agentcontext.RequiredRequestSectionExceedsBudget(size, report.EffectiveBudget) {
 			report = report.WithReason(agentcontext.ReasonRequiredSectionOverBudget)
 		}
-		return model.Request{}, report, agentcontext.RequestSizeBudgetError(size, report.EffectiveBudget)
+		return model.Request{}, report, agentcontext.RequestTokenBudgetError(size, report.EffectiveBudget)
 	}
 	return req, report, nil
 }
@@ -793,35 +796,35 @@ func validateControlDirective(control model.ControlDirective) error {
 
 func (l *Loop) toolAdmissionConfig() tool.ToolAdmissionConfig {
 	return tool.ToolAdmissionConfig{
-		MaxToolCount:            l.config.MaxToolCount,
-		MaxToolDescriptionBytes: l.config.MaxToolDescriptionBytes,
-		MaxToolSchemaBytes:      l.config.MaxToolSchemaBytes,
-		MaxTotalToolSchemaBytes: l.config.MaxTotalToolSchemaBytes,
+		MaxToolCount:             l.config.MaxToolCount,
+		MaxToolDescriptionTokens: l.config.MaxToolDescriptionTokens,
+		MaxToolSchemaTokens:      l.config.MaxToolSchemaTokens,
+		MaxTotalToolSchemaTokens: l.config.MaxTotalToolSchemaTokens,
 	}
 }
 
 func contextBuildTraceFields(stepIndex int, report agentcontext.ContextBuildReport) trace.Fields {
 	fields := trace.Fields{
-		"step_index":                          stepIndex,
-		"reason_codes":                        append([]string(nil), report.ReasonCodes...),
-		"recent_memory_retained":              report.RecentMemory.RetainedCount,
-		"recent_memory_dropped":               report.RecentMemory.DroppedCount,
-		"transcript_retained":                 report.Transcript.RetainedCount,
-		"transcript_dropped":                  report.Transcript.DroppedCount,
-		"accepted_tool_count":                 report.ToolAdmission.AcceptedToolCount,
-		"accepted_tool_names":                 append([]string(nil), report.ToolAdmission.AcceptedToolNames...),
-		"accepted_tool_names_truncated_count": report.ToolAdmission.AcceptedToolNamesTruncatedCount,
-		"dropped_tool_count":                  report.ToolAdmission.DroppedToolCount,
-		"dropped_tool_names":                  append([]string(nil), report.ToolAdmission.DroppedToolNames...),
-		"dropped_tool_names_truncated_count":  report.ToolAdmission.DroppedToolNamesTruncatedCount,
-		"dropped_tool_reason_counts":          copyStringIntMap(report.ToolAdmission.DroppedReasonCounts),
-		"tool_schema_total_bytes":             report.ToolAdmission.TotalSchemaBytes,
-		"request_total_bytes":                 report.FinalRequestSize.TotalBytes,
-		"request_system_bytes":                report.FinalRequestSize.SystemBytes,
-		"request_messages_bytes":              report.FinalRequestSize.MessagesBytes,
-		"request_user_message_bytes":          report.FinalRequestSize.UserMessageBytes,
-		"request_tools_bytes":                 report.FinalRequestSize.ToolsBytes,
-		"request_controls_bytes":              report.FinalRequestSize.ControlsBytes,
+		"step_index":                            stepIndex,
+		"reason_codes":                          append([]string(nil), report.ReasonCodes...),
+		"recent_memory_retained":                report.RecentMemory.RetainedCount,
+		"recent_memory_dropped":                 report.RecentMemory.DroppedCount,
+		"transcript_retained":                   report.Transcript.RetainedCount,
+		"transcript_dropped":                    report.Transcript.DroppedCount,
+		"accepted_tool_count":                   report.ToolAdmission.AcceptedToolCount,
+		"accepted_tool_names":                   append([]string(nil), report.ToolAdmission.AcceptedToolNames...),
+		"accepted_tool_names_truncated_count":   report.ToolAdmission.AcceptedToolNamesTruncatedCount,
+		"dropped_tool_count":                    report.ToolAdmission.DroppedToolCount,
+		"dropped_tool_names":                    append([]string(nil), report.ToolAdmission.DroppedToolNames...),
+		"dropped_tool_names_truncated_count":    report.ToolAdmission.DroppedToolNamesTruncatedCount,
+		"dropped_tool_reason_counts":            copyStringIntMap(report.ToolAdmission.DroppedReasonCounts),
+		"tool_schema_total_estimated_tokens":    report.ToolAdmission.TotalSchemaEstimatedTokens,
+		"request_total_estimated_tokens":        report.FinalRequestSize.TotalEstimatedTokens,
+		"request_system_estimated_tokens":       report.FinalRequestSize.SystemEstimatedTokens,
+		"request_messages_estimated_tokens":     report.FinalRequestSize.MessagesEstimatedTokens,
+		"request_user_message_estimated_tokens": report.FinalRequestSize.UserMessageEstimatedTokens,
+		"request_tools_estimated_tokens":        report.FinalRequestSize.ToolsEstimatedTokens,
+		"request_controls_estimated_tokens":     report.FinalRequestSize.ControlsEstimatedTokens,
 	}
 	return fields
 }
