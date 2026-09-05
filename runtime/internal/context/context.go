@@ -332,17 +332,17 @@ func newContextBuildReport(projection ContextProjection, input BuildInput, budge
 
 func sectionReportsForProjection(projection ContextProjection) SectionReports {
 	return SectionReports{
-		{Name: "runtime_policy", Included: projection.RuntimePolicy != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.RuntimePolicy)},
-		{Name: "instruction", Included: projection.Instruction != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.Instruction)},
-		{Name: "agent_descriptor", Included: true, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.AgentDescriptor)},
-		{Name: "game_definition", Included: projection.GameDefinition != nil, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.GameDefinition)},
-		{Name: "agent_definition", Included: projection.AgentDefinition != nil, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.AgentDefinition)},
-		{Name: "current_event", Included: projection.CurrentEvent.EventID != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentEvent)},
-		{Name: "current_event_context_facts", Included: len(projection.CurrentEventContextFacts) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentEventContextFacts)},
-		{Name: "current_observation", Included: projection.CurrentObservation.EntityID != "", ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentObservation)},
-		{Name: "recent_memory", Included: len(projection.RecentMemory) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.RecentMemory)},
-		{Name: "tools", Included: len(projection.Tools) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.Tools)},
-		{Name: "current_turn_transcript", Included: len(projection.CurrentTurnTranscript) > 0, ProjectionEstimatedTokens: mustSectionProjectionEstimatedTokens(projection.CurrentTurnTranscript)},
+		{Name: "runtime_policy", Included: projection.RuntimePolicy != "", ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.RuntimePolicy)},
+		{Name: "instruction", Included: projection.Instruction != "", ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.Instruction)},
+		{Name: "agent_descriptor", Included: true, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.AgentDescriptor)},
+		{Name: "game_definition", Included: projection.GameDefinition != nil, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.GameDefinition)},
+		{Name: "agent_definition", Included: projection.AgentDefinition != nil, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.AgentDefinition)},
+		{Name: "current_event", Included: projection.CurrentEvent.EventID != "", ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.CurrentEvent)},
+		{Name: "current_event_context_facts", Included: len(projection.CurrentEventContextFacts) > 0, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.CurrentEventContextFacts)},
+		{Name: "current_observation", Included: projection.CurrentObservation.EntityID != "", ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.CurrentObservation)},
+		{Name: "recent_memory", Included: len(projection.RecentMemory) > 0, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.RecentMemory)},
+		{Name: "tools", Included: len(projection.Tools) > 0, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.Tools)},
+		{Name: "current_turn_transcript", Included: len(projection.CurrentTurnTranscript) > 0, ProjectionEstimatedTokens: sectionProjectionEstimatedTokens(projection.CurrentTurnTranscript)},
 	}
 }
 
@@ -855,14 +855,10 @@ func truncationMap(message string) map[string]any {
 	return map[string]any{"_truncated": message}
 }
 
-func mustSectionProjectionEstimatedTokens(value any) int {
-	return sectionProjectionEstimatedTokens(value)
-}
-
 func sectionProjectionEstimatedTokens(value any) int {
 	tokens, err := tokenestimate.EstimateStableJSON(value)
 	if err != nil {
-		return 0
+		panic(fmt.Sprintf("estimate projection tokens: %v", err))
 	}
 	return tokens
 }

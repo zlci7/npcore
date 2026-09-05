@@ -3,7 +3,7 @@ package tokenestimate
 import "testing"
 
 func TestEstimateTextCountsCJKRunesConservatively(t *testing.T) {
-	text := repeatRune('春', 100)
+	text := repeatRune('\u6625', 100)
 
 	if got, want := EstimateText(text), 100; got != want {
 		t.Fatalf("EstimateText(CJK) = %d, want %d", got, want)
@@ -19,7 +19,7 @@ func TestEstimateTextCompactsASCIIWordRuns(t *testing.T) {
 }
 
 func TestEstimateTextHandlesMixedRunsAndPunctuation(t *testing.T) {
-	text := "hello, 春天!"
+	text := "hello, \u6625\u5929!"
 
 	if got, want := EstimateText(text), 7; got != want {
 		t.Fatalf("EstimateText(mixed) = %d, want %d", got, want)
@@ -34,8 +34,8 @@ func TestEstimateTextCountsJSONPunctuationIndividually(t *testing.T) {
 	}
 }
 
-func TestEstimateTextCountsEmojiAndFullWidthPunctuationAsRunes(t *testing.T) {
-	text := "🙂，。"
+func TestEstimateTextCountsEmojiAndFullWidthPunctuationConservatively(t *testing.T) {
+	text := "\U0001f642\uff0c\u3002"
 
 	if got, want := EstimateText(text), 3; got != want {
 		t.Fatalf("EstimateText(emoji/full-width punctuation) = %d, want %d", got, want)
@@ -43,8 +43,8 @@ func TestEstimateTextCountsEmojiAndFullWidthPunctuationAsRunes(t *testing.T) {
 }
 
 func TestEstimateStableJSONIsDeterministicForMapOrder(t *testing.T) {
-	left := map[string]any{"b": 2, "a": "春"}
-	right := map[string]any{"a": "春", "b": 2}
+	left := map[string]any{"b": 2, "a": "\u6625"}
+	right := map[string]any{"a": "\u6625", "b": 2}
 
 	leftJSON, err := CompactStableJSON(left)
 	if err != nil {
@@ -72,11 +72,11 @@ func TestEstimateStableJSONIsDeterministicForMapOrder(t *testing.T) {
 }
 
 func TestEstimateStableJSONIncreasesWithAdditionalContent(t *testing.T) {
-	base, err := EstimateStableJSON(map[string]any{"text": "春"})
+	base, err := EstimateStableJSON(map[string]any{"text": "\u6625"})
 	if err != nil {
 		t.Fatalf("EstimateStableJSON(base) error = %v", err)
 	}
-	larger, err := EstimateStableJSON(map[string]any{"text": "春天"})
+	larger, err := EstimateStableJSON(map[string]any{"text": "\u6625\u5929"})
 	if err != nil {
 		t.Fatalf("EstimateStableJSON(larger) error = %v", err)
 	}

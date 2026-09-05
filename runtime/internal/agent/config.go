@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	agentcontext "gameagent/runtime/internal/context"
-	"log"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -17,6 +15,28 @@ const (
 
 	defaultMemoryEnabled = true
 )
+
+type removedBudgetField struct {
+	key         string
+	replacement string
+}
+
+var removedByteBudgetFields = []removedBudgetField{
+	{key: "memory_context_size_limit", replacement: "max_recent_memory_tokens"},
+	{key: "max_request_bytes", replacement: "max_request_tokens"},
+	{key: "max_system_bytes", replacement: "max_system_tokens"},
+	{key: "max_user_message_bytes", replacement: "max_user_message_tokens"},
+	{key: "max_definition_bytes", replacement: "max_definition_tokens"},
+	{key: "max_observation_bytes", replacement: "max_observation_tokens"},
+	{key: "max_event_bytes", replacement: "max_event_tokens"},
+	{key: "max_context_facts_bytes", replacement: "max_context_facts_tokens"},
+	{key: "max_recent_memory_bytes", replacement: "max_recent_memory_tokens"},
+	{key: "max_transcript_bytes", replacement: "max_transcript_tokens"},
+	{key: "max_tool_description_bytes", replacement: "max_tool_description_tokens"},
+	{key: "max_tool_schema_bytes", replacement: "max_tool_schema_tokens"},
+	{key: "max_total_tool_schema_bytes", replacement: "max_total_tool_schema_tokens"},
+	{key: "max_tool_result_output_bytes", replacement: "max_tool_result_output_tokens"},
+}
 
 type Config struct {
 	TurnTimeout                   time.Duration
@@ -62,7 +82,6 @@ type fileConfig struct {
 	AsyncActionTimeoutMS          int64        `json:"async_action_timeout_ms"`
 	MemoryEnabled                 *bool        `json:"memory_enabled"`
 	RecentMemoryLimit             int          `json:"recent_memory_limit"`
-	MemoryContextSizeLimit        int          `json:"memory_context_size_limit"`
 	MaxSteps                      int          `json:"max_steps"`
 	MaxToolCallsPerStep           int          `json:"max_tool_calls_per_step"`
 	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
@@ -82,19 +101,6 @@ type fileConfig struct {
 	MaxToolSchemaTokens           int          `json:"max_tool_schema_tokens"`
 	MaxTotalToolSchemaTokens      int          `json:"max_total_tool_schema_tokens"`
 	MaxToolResultOutputTokens     int          `json:"max_tool_result_output_tokens"`
-	MaxRequestBytes               int          `json:"max_request_bytes"`
-	MaxSystemBytes                int          `json:"max_system_bytes"`
-	MaxUserMessageBytes           int          `json:"max_user_message_bytes"`
-	MaxDefinitionBytes            int          `json:"max_definition_bytes"`
-	MaxObservationBytes           int          `json:"max_observation_bytes"`
-	MaxEventBytes                 int          `json:"max_event_bytes"`
-	MaxContextFactsBytes          int          `json:"max_context_facts_bytes"`
-	MaxRecentMemoryBytes          int          `json:"max_recent_memory_bytes"`
-	MaxTranscriptBytes            int          `json:"max_transcript_bytes"`
-	MaxToolDescriptionBytes       int          `json:"max_tool_description_bytes"`
-	MaxToolSchemaBytes            int          `json:"max_tool_schema_bytes"`
-	MaxTotalToolSchemaBytes       int          `json:"max_total_tool_schema_bytes"`
-	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
 	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
 	MaxToolResultOutputArrayItems int          `json:"max_tool_result_output_array_items"`
@@ -174,14 +180,13 @@ func LoadConfigFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read agent config: %w", err)
 	}
 
+	if err := rejectRemovedByteBudgetFields(data); err != nil {
+		return Config{}, err
+	}
+
 	var raw fileConfig
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Config{}, fmt.Errorf("parse agent config: %w", err)
-	}
-
-	legacyBudgetFields := raw.legacyBudgetFields()
-	if len(legacyBudgetFields) > 0 {
-		log.Printf("agent config uses deprecated byte budget fields; migrate to *_tokens: %s", strings.Join(legacyBudgetFields, ", "))
 	}
 
 	cfg := Config{
@@ -198,20 +203,20 @@ func LoadConfigFile(path string) (Config, error) {
 		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
 		MaxAsyncActionsPerTurn:        raw.MaxAsyncActionsPerTurn,
 		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
-		MaxRequestTokens:              budgetTokenValue(raw.MaxRequestTokens, raw.MaxRequestBytes),
-		MaxSystemTokens:               budgetTokenValue(raw.MaxSystemTokens, raw.MaxSystemBytes),
-		MaxUserMessageTokens:          budgetTokenValue(raw.MaxUserMessageTokens, raw.MaxUserMessageBytes),
-		MaxDefinitionTokens:           budgetTokenValue(raw.MaxDefinitionTokens, raw.MaxDefinitionBytes),
-		MaxObservationTokens:          budgetTokenValue(raw.MaxObservationTokens, raw.MaxObservationBytes),
-		MaxEventTokens:                budgetTokenValue(raw.MaxEventTokens, raw.MaxEventBytes),
-		MaxContextFactsTokens:         budgetTokenValue(raw.MaxContextFactsTokens, raw.MaxContextFactsBytes),
-		MaxRecentMemoryTokens:         recentMemoryTokenValue(raw),
-		MaxTranscriptTokens:           budgetTokenValue(raw.MaxTranscriptTokens, raw.MaxTranscriptBytes),
+		MaxRequestTokens:              raw.MaxRequestTokens,
+		MaxSystemTokens:               raw.MaxSystemTokens,
+		MaxUserMessageTokens:          raw.MaxUserMessageTokens,
+		MaxDefinitionTokens:           raw.MaxDefinitionTokens,
+		MaxObservationTokens:          raw.MaxObservationTokens,
+		MaxEventTokens:                raw.MaxEventTokens,
+		MaxContextFactsTokens:         raw.MaxContextFactsTokens,
+		MaxRecentMemoryTokens:         raw.MaxRecentMemoryTokens,
+		MaxTranscriptTokens:           raw.MaxTranscriptTokens,
 		MaxToolCount:                  raw.MaxToolCount,
-		MaxToolDescriptionTokens:      budgetTokenValue(raw.MaxToolDescriptionTokens, raw.MaxToolDescriptionBytes),
-		MaxToolSchemaTokens:           budgetTokenValue(raw.MaxToolSchemaTokens, raw.MaxToolSchemaBytes),
-		MaxTotalToolSchemaTokens:      budgetTokenValue(raw.MaxTotalToolSchemaTokens, raw.MaxTotalToolSchemaBytes),
-		MaxToolResultOutputTokens:     budgetTokenValue(raw.MaxToolResultOutputTokens, raw.MaxToolResultOutputBytes),
+		MaxToolDescriptionTokens:      raw.MaxToolDescriptionTokens,
+		MaxToolSchemaTokens:           raw.MaxToolSchemaTokens,
+		MaxTotalToolSchemaTokens:      raw.MaxTotalToolSchemaTokens,
+		MaxToolResultOutputTokens:     raw.MaxToolResultOutputTokens,
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
 		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
 		MaxToolResultOutputArrayItems: raw.MaxToolResultOutputArrayItems,
@@ -220,6 +225,19 @@ func LoadConfigFile(path string) (Config, error) {
 	}.WithDefaults()
 
 	return cfg, nil
+}
+
+func rejectRemovedByteBudgetFields(data []byte) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(data, &values); err != nil {
+		return fmt.Errorf("parse agent config: %w", err)
+	}
+	for _, field := range removedByteBudgetFields {
+		if _, ok := values[field.key]; ok {
+			return fmt.Errorf("agent config uses removed byte budget field %q; use %q", field.key, field.replacement)
+		}
+	}
+	return nil
 }
 
 // MemoryEnabledValue 返回最终生效的 MemoryEnabled。
@@ -349,60 +367,6 @@ func (c Config) WithDefaults() Config {
 	}
 	c.Prompt = c.Prompt.WithDefaults()
 	return c
-}
-
-func budgetTokenValue(tokenValue int, legacyBytes int) int {
-	if tokenValue > 0 {
-		return tokenValue
-	}
-	if legacyBytes > 0 {
-		return legacyBytesToEstimatedTokens(legacyBytes)
-	}
-	return 0
-}
-
-func recentMemoryTokenValue(raw fileConfig) int {
-	if raw.MaxRecentMemoryTokens > 0 {
-		return raw.MaxRecentMemoryTokens
-	}
-	if raw.MaxRecentMemoryBytes > 0 {
-		return legacyBytesToEstimatedTokens(raw.MaxRecentMemoryBytes)
-	}
-	if raw.MemoryContextSizeLimit > 0 {
-		return legacyBytesToEstimatedTokens(raw.MemoryContextSizeLimit)
-	}
-	return 0
-}
-
-func legacyBytesToEstimatedTokens(bytes int) int {
-	if bytes <= 0 {
-		return 0
-	}
-	return (bytes + 3) / 4
-}
-
-func (c fileConfig) legacyBudgetFields() []string {
-	fields := make([]string, 0)
-	add := func(name string, value int) {
-		if value > 0 {
-			fields = append(fields, name)
-		}
-	}
-	add("memory_context_size_limit", c.MemoryContextSizeLimit)
-	add("max_request_bytes", c.MaxRequestBytes)
-	add("max_system_bytes", c.MaxSystemBytes)
-	add("max_user_message_bytes", c.MaxUserMessageBytes)
-	add("max_definition_bytes", c.MaxDefinitionBytes)
-	add("max_observation_bytes", c.MaxObservationBytes)
-	add("max_event_bytes", c.MaxEventBytes)
-	add("max_context_facts_bytes", c.MaxContextFactsBytes)
-	add("max_recent_memory_bytes", c.MaxRecentMemoryBytes)
-	add("max_transcript_bytes", c.MaxTranscriptBytes)
-	add("max_tool_description_bytes", c.MaxToolDescriptionBytes)
-	add("max_tool_schema_bytes", c.MaxToolSchemaBytes)
-	add("max_total_tool_schema_bytes", c.MaxTotalToolSchemaBytes)
-	add("max_tool_result_output_bytes", c.MaxToolResultOutputBytes)
-	return fields
 }
 
 // durationMS 将配置文件中的毫秒值转换成 time.Duration。

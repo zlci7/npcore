@@ -257,7 +257,7 @@ Section budget 使用 projection estimated tokens 做确定性预预算；全局
 
 `MaxSystemTokens` 和 `MaxUserMessageTokens` 约束对应 request section；`MaxRequestTokens` 是 provider-neutral request estimated-token hard limit。若必保内容和工具在最终 request 中超过 `MaxRequestTokens`，Runtime 不裁剪必保内容，也不静默发送超预算请求；本次 build 明确失败，并在 `ContextBuildReport` 中记录 `required_context_over_budget`。若超限来自必保 section 本身，Report 同时记录 `required_section_over_budget` 作为细分原因。
 
-Phase7.4 将旧 JSON 字段 `memory_context_size_limit` 和 `max_recent_memory_bytes` 作为兼容输入映射到 `MaxRecentMemoryTokens`。所有旧 `max_*_bytes` 字段通过 `ceil(bytes / 4)` 转为 token limit；新 token 字段优先。Runtime 内部只能形成一份 effective token budget，不能同时保留两套 Recent Memory 预算。
+Phase7.4 的配置入口只接受 token 预算字段。项目当前未上线，不保留旧计量单位预算兼容入口。Runtime 内部只能形成一份 effective token budget。默认 `MaxRequestTokens = 65536` 表示 64K provider-neutral estimated tokens，是 Phase7.4 token-only 后有意变宽的新语义，不等价于旧 64KB 预算。
 
 ## 4.3 Budget 执行顺序与 Section 优先级
 
@@ -579,7 +579,7 @@ EstimateRequestTokens
 按固定保留顺序裁剪 optional projection
 ```
 
-如果 Final TurnToolView 加上所有 required minimum 已超过 `MaxRequestTokens`，本次 build 失败并记录 `required_context_over_budget` / `required_section_over_budget`，不能在某个 AgentStep 临时修改工具视图。
+如果 Final TurnToolView 加上所有 required minimum 已超过 `MaxRequestTokens`，本次 build 失败并记录 `required_context_over_budget`，不能在某个 AgentStep 临时修改工具视图。只有具体 required section 本身超限时，才额外记录 `required_section_over_budget`。
 
 Phase7.4 不改变 capability bootstrap、EnvironmentToolCatalog ownership 或 hot refresh 语义。
 
@@ -800,8 +800,8 @@ ContextBuildReport 记录 section included / cropped / dropped
 ContextBuildReport 记录 Definition fallback
 ContextBuildReport 记录 final request estimated token summary
 预算配置为 0 或负数时使用 Runtime 默认值
-旧 memory_context_size_limit / max_recent_memory_bytes 映射到 MaxRecentMemoryTokens，不产生双预算
-必保内容超过 MaxRequestTokens 时返回明确失败和 required_section_over_budget
+配置入口只读取 token 预算字段，不产生双预算
+必保内容超过 MaxRequestTokens 时返回明确失败和 required_context_over_budget
 Current Event ContextFacts core 不被旧 Memory 挤掉
 map 插入顺序不同但语义相同的输入生成相同 Projection、Request 和 Report
 固定 model.Request 下 EstimateRequestTokens 输出确定
@@ -992,7 +992,7 @@ Transcript causal group budget
 Observation / Event structured cropping
 Projection estimated-token sizing helper
 EstimateRequestTokens
-config migration from memory_context_size_limit / max_recent_memory_bytes
+token-only config loading
 ```
 
 验收点：

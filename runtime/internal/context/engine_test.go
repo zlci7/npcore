@@ -871,19 +871,19 @@ func TestEngineBuildAppliesRecentMemoryBudgetUsingProjectionEstimatedTokens(t *t
 	if err != nil {
 		t.Fatalf("baseline Build returned error: %v", err)
 	}
-	proxyBytes := reportSectionProjectionEstimatedTokens(t, baseline.Report, "recent_memory")
-	if proxyBytes <= 1 {
-		t.Fatalf("recent_memory proxy bytes = %d, want > 1", proxyBytes)
+	proxyTokens := reportSectionProjectionEstimatedTokens(t, baseline.Report, "recent_memory")
+	if proxyTokens <= 1 {
+		t.Fatalf("recent_memory proxy tokens = %d, want > 1", proxyTokens)
 	}
 
 	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
-		MaxRecentMemoryTokens: proxyBytes - 1,
+		MaxRecentMemoryTokens: proxyTokens - 1,
 	}).Build(input)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
 	if len(result.Projection.RecentMemory) != 0 {
-		t.Fatalf("RecentMemory = %+v, want dropped when proxy bytes exceed budget", result.Projection.RecentMemory)
+		t.Fatalf("RecentMemory = %+v, want dropped when proxy tokens exceed budget", result.Projection.RecentMemory)
 	}
 	if result.Report.RecentMemory.RetainedCount != 0 || result.Report.RecentMemory.DroppedCount != 1 {
 		t.Fatalf("RecentMemory report = %+v, want one dropped memory", result.Report.RecentMemory)
@@ -1352,9 +1352,9 @@ func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(
 	if err != nil {
 		t.Fatalf("baseline Build returned error: %v", err)
 	}
-	eventShellBytes := reportSectionProjectionEstimatedTokens(t, baseline.Report, "current_event")
+	eventShellTokens := reportSectionProjectionEstimatedTokens(t, baseline.Report, "current_event")
 
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventTokens: eventShellBytes})
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxEventTokens: eventShellTokens})
 	input := validEngineInput(t)
 	input.Event.Payload = mustStruct(t, map[string]any{
 		"large": strings.Repeat("event-secret", 40),
@@ -1367,8 +1367,8 @@ func TestEngineBuildDropsStructuredTruncationMarkerBeforeFailingRequiredMinimum(
 	if len(result.Projection.CurrentEvent.Payload) != 0 {
 		t.Fatalf("CurrentEvent.Payload = %+v, want dropped optional payload", result.Projection.CurrentEvent.Payload)
 	}
-	if got := reportSectionProjectionEstimatedTokens(t, result.Report, "current_event"); got > eventShellBytes {
-		t.Fatalf("current_event proxy bytes = %d, want <= %d", got, eventShellBytes)
+	if got := reportSectionProjectionEstimatedTokens(t, result.Report, "current_event"); got > eventShellTokens {
+		t.Fatalf("current_event proxy tokens = %d, want <= %d", got, eventShellTokens)
 	}
 	if !reportHasReason(result.Report, agentcontext.ReasonEventBudgetExceeded) {
 		t.Fatalf("ReasonCodes = %v, want event budget reason", result.Report.ReasonCodes)

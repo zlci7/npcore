@@ -110,17 +110,17 @@ func trimTranscriptGroups(groups []transcriptCausalGroup, limit int) ([]model.Me
 	}
 
 	selectedStart := len(groups)
-	totalBytes := 0
+	totalTokens := 0
 	for i := len(groups) - 1; i >= 0; i-- {
-		groupBytes := sectionProjectionEstimatedTokens(groups[i].messages)
-		if totalBytes+groupBytes > limit {
+		groupTokens := sectionProjectionEstimatedTokens(groups[i].messages)
+		if totalTokens+groupTokens > limit {
 			if selectedStart == len(groups) {
 				return nil, len(flattenTranscriptGroups(groups)), fmt.Errorf("%w: latest transcript causal group exceeds token budget", ErrBudgetExceeded)
 			}
 			break
 		}
 		selectedStart = i
-		totalBytes += groupBytes
+		totalTokens += groupTokens
 	}
 
 	kept := flattenTranscriptGroups(groups[selectedStart:])

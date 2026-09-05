@@ -12,6 +12,7 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+	"gameagent/runtime/internal/tokenestimate"
 	"gameagent/runtime/internal/tool"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -857,8 +858,12 @@ func TestToolResultOutputProjectionAppliesBounds(t *testing.T) {
 			t.Fatalf("bounded projection leaked %q:\n%s", unwanted, content)
 		}
 	}
-	if outputSize := len(mustMarshalJSONBytes(t, extractJSONFieldMap(t, content, "output"))); outputSize > 300 {
-		t.Fatalf("tool result output = %d bytes, want <= 300:\n%s", outputSize, content)
+	outputTokens, err := tokenestimate.EstimateStableJSON(extractJSONFieldMap(t, content, "output"))
+	if err != nil {
+		t.Fatalf("EstimateStableJSON(output) returned error: %v", err)
+	}
+	if outputTokens > 300 {
+		t.Fatalf("tool result output = %d estimated tokens, want <= 300:\n%s", outputTokens, content)
 	}
 }
 

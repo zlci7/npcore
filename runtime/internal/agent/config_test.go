@@ -350,89 +350,57 @@ func TestLoadConfigFileLoadsPhase74BudgetConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFileMapsLegacyByteBudgetsToEstimatedTokens(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "agent.json")
-	data := []byte(`{
-  "max_request_bytes": 10000,
-  "max_system_bytes": 1000,
-  "max_user_message_bytes": 8000,
-  "max_definition_bytes": 1200,
-  "max_observation_bytes": 2200,
-  "max_event_bytes": 900,
-  "max_context_facts_bytes": 700,
-  "max_recent_memory_bytes": 333,
-  "max_transcript_bytes": 444,
-  "max_tool_description_bytes": 88,
-  "max_tool_schema_bytes": 99,
-  "max_total_tool_schema_bytes": 222,
-  "max_tool_result_output_bytes": 1234
-}`)
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestLoadConfigFileRejectsRemovedByteBudgetFields(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		key  string
+		want string
+	}{
+		{
+			name: "request bytes",
+			json: `{"max_request_bytes": 10000}`,
+			key:  "max_request_bytes",
+			want: "max_request_tokens",
+		},
+		{
+			name: "memory context size limit",
+			json: `{"memory_context_size_limit": 777}`,
+			key:  "memory_context_size_limit",
+			want: "max_recent_memory_tokens",
+		},
 	}
 
-	cfg, err := agent.LoadConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "agent.json")
+			if err := os.WriteFile(configPath, []byte(tc.json), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
 
-	if cfg.MaxRequestTokens != 2500 ||
-		cfg.MaxSystemTokens != 250 ||
-		cfg.MaxUserMessageTokens != 2000 ||
-		cfg.MaxDefinitionTokens != 300 ||
-		cfg.MaxObservationTokens != 550 ||
-		cfg.MaxEventTokens != 225 ||
-		cfg.MaxContextFactsTokens != 175 ||
-		cfg.MaxRecentMemoryTokens != 84 ||
-		cfg.MaxTranscriptTokens != 111 ||
-		cfg.MaxToolDescriptionTokens != 22 ||
-		cfg.MaxToolSchemaTokens != 25 ||
-		cfg.MaxTotalToolSchemaTokens != 56 ||
-		cfg.MaxToolResultOutputTokens != 309 {
-		t.Fatalf("legacy byte budgets were not converted with ceil(bytes/4): %+v", cfg)
+			_, err := agent.LoadConfigFile(configPath)
+			if err == nil {
+				t.Fatal("LoadConfigFile returned nil error, want removed byte budget field rejection")
+			}
+			message := err.Error()
+			if !strings.Contains(message, tc.key) || !strings.Contains(message, tc.want) {
+				t.Fatalf("LoadConfigFile error = %q, want to mention %q and %q", message, tc.key, tc.want)
+			}
+		})
 	}
 }
 
-func TestLoadConfigFilePrefersTokenBudgetsOverLegacyBytes(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "agent.json")
-	data := []byte(`{
-  "max_request_tokens": 9000,
-  "max_request_bytes": 10000,
-  "max_recent_memory_tokens": 321,
-  "max_recent_memory_bytes": 333,
-  "memory_context_size_limit": 777
-}`)
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+func TestDefaultConfigUsesPhase74EstimatedTokenBudget(t *testing.T) {
+	cfg := agent.DefaultConfig()
 
-	cfg, err := agent.LoadConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
+	if cfg.MaxRequestTokens != 65536 {
+		t.Fatalf("MaxRequestTokens = %d, want 65536 estimated tokens", cfg.MaxRequestTokens)
 	}
-
-	if cfg.MaxRequestTokens != 9000 {
-		t.Fatalf("MaxRequestTokens = %d, want token field to win", cfg.MaxRequestTokens)
+	if cfg.MaxSystemTokens != 8192 {
+		t.Fatalf("MaxSystemTokens = %d, want 8192 estimated tokens", cfg.MaxSystemTokens)
 	}
-	if cfg.MaxRecentMemoryTokens != 321 {
-		t.Fatalf("MaxRecentMemoryTokens = %d, want token field to win over legacy aliases", cfg.MaxRecentMemoryTokens)
-	}
-}
-
-func TestLoadConfigFileMapsLegacyMemoryContextLimitToRecentMemoryTokens(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "agent.json")
-	data := []byte(`{"memory_context_size_limit": 777}`)
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := agent.LoadConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-
-	if cfg.MaxRecentMemoryTokens != 195 {
-		t.Fatalf("MaxRecentMemoryTokens = %d, want legacy memory_context_size_limit converted to 195", cfg.MaxRecentMemoryTokens)
+	if cfg.MaxUserMessageTokens != 49152 {
+		t.Fatalf("MaxUserMessageTokens = %d, want 49152 estimated tokens", cfg.MaxUserMessageTokens)
 	}
 }
 

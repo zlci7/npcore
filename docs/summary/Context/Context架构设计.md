@@ -873,7 +873,7 @@ year, season, day, hour, minute, tick
 
 连续、同一非空 `GameTime` 且 `SourceEventSequence` 非 0 的 MemoryRecord 片段应按 `SourceEventSequence` 升序稳定排序。`SourceEventSequence` 来源于 `GameEvent.sequence`。缺少可比较 `GameTime` 或 `SourceEventSequence` 时，该 MemoryRecord 保持 MemoryStore 返回顺序。
 
-未来时间过滤必须发生在 memory context byte budget trim 之前，避免未来时间记录占用预算并挤掉当前时间线中的有效记忆。
+未来时间过滤必须发生在 memory context estimated-token budget trim 之前，避免未来时间记录占用预算并挤掉当前时间线中的有效记忆。
 
 MVP0 首先在 Context selection 阶段过滤未来时间 Memory，不要求从 MemoryStore 中删除记录。持久化 Memory 的 prune / invalidation 属于 Environment Recovery 与长期状态阶段。
 
@@ -1509,7 +1509,7 @@ Current Turn Transcript
 Phase7 第一版使用 provider-neutral approximate budget：
 
 ```text
-预算单位 = UTF-8 serialized bytes
+预算单位 = provider-neutral estimated tokens
 ```
 
 整体预算至少覆盖：

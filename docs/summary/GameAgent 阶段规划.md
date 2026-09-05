@@ -894,7 +894,7 @@ Scope 不一致失败语义：
 
 ```text
 预算单位：
-    UTF-8 serialized bytes
+    provider-neutral estimated tokens
 
 整体预算至少覆盖：
     Request.System
