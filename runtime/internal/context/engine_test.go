@@ -621,7 +621,6 @@ func TestEngineBuildProjectsRecentMemorySelection(t *testing.T) {
 }
 
 func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.EngineConfig{MemoryContextSizeLimit: 95})
 	input := validEngineInput(t)
 	input.RecentMemories = []memory.Record{
 		{
@@ -641,6 +640,15 @@ func TestEngineBuildAppliesRecentMemorySoftLimit(t *testing.T) {
 			}},
 		},
 	}
+	latestOnlyInput := input
+	latestOnlyInput.RecentMemories = input.RecentMemories[1:]
+	latestOnly, err := agentcontext.NewEngine(agentcontext.EngineConfig{}).Build(latestOnlyInput)
+	if err != nil {
+		t.Fatalf("latest-only Build returned error: %v", err)
+	}
+	engine := agentcontext.NewEngine(agentcontext.EngineConfig{
+		MemoryContextSizeLimit: reportSectionProxyBytes(t, latestOnly.Report, "recent_memory"),
+	})
 
 	result, err := engine.Build(input)
 	if err != nil {
@@ -762,7 +770,6 @@ func TestEngineBuildProjectsCurrentTurnTranscriptWithBounds(t *testing.T) {
 }
 
 func TestEngineBuildReportsMemoryBudgetWithoutDroppingRequiredProjection(t *testing.T) {
-	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxRecentMemoryBytes: 72})
 	input := validEngineInput(t)
 	input.RecentMemories = []memory.Record{
 		{
@@ -782,6 +789,15 @@ func TestEngineBuildReportsMemoryBudgetWithoutDroppingRequiredProjection(t *test
 			}},
 		},
 	}
+	latestOnlyInput := input
+	latestOnlyInput.RecentMemories = input.RecentMemories[1:]
+	latestOnly, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(latestOnlyInput)
+	if err != nil {
+		t.Fatalf("latest-only Build returned error: %v", err)
+	}
+	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRecentMemoryBytes: reportSectionProxyBytes(t, latestOnly.Report, "recent_memory"),
+	})
 
 	result, err := engine.Build(input)
 	if err != nil {
@@ -836,6 +852,40 @@ func TestEngineBuildDropsNewestMemoryWhenItExceedsMemoryBudget(t *testing.T) {
 	}
 	if !reportHasReason(result.Report, agentcontext.ReasonMemoryBudgetExceeded) {
 		t.Fatalf("ReasonCodes = %v, want memory budget reason", result.Report.ReasonCodes)
+	}
+}
+
+func TestEngineBuildAppliesRecentMemoryBudgetUsingProxyBytes(t *testing.T) {
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{{
+		MemoryID: "new",
+		SourceContextFacts: []memory.SourceContextFact{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          "hi",
+		}},
+	}}
+
+	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{}).Build(input)
+	if err != nil {
+		t.Fatalf("baseline Build returned error: %v", err)
+	}
+	proxyBytes := reportSectionProxyBytes(t, baseline.Report, "recent_memory")
+	if proxyBytes <= 1 {
+		t.Fatalf("recent_memory proxy bytes = %d, want > 1", proxyBytes)
+	}
+
+	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRecentMemoryBytes: proxyBytes - 1,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if len(result.Projection.RecentMemory) != 0 {
+		t.Fatalf("RecentMemory = %+v, want dropped when proxy bytes exceed budget", result.Projection.RecentMemory)
+	}
+	if result.Report.RecentMemory.RetainedCount != 0 || result.Report.RecentMemory.DroppedCount != 1 {
+		t.Fatalf("RecentMemory report = %+v, want one dropped memory", result.Report.RecentMemory)
 	}
 }
 
@@ -994,9 +1044,11 @@ func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T
 		t.Fatalf("Build error = %v, want ErrBudgetExceeded", err)
 	}
 	if !reportHasReason(result.Report, agentcontext.ReasonDefinitionBudgetExceeded) ||
-		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) ||
-		!reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
-		t.Fatalf("ReasonCodes = %v, want definition and required section budget reasons", result.Report.ReasonCodes)
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want definition and required context budget reasons", result.Report.ReasonCodes)
+	}
+	if reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want no required section reason for definition budget", result.Report.ReasonCodes)
 	}
 }
 
@@ -1208,9 +1260,11 @@ func TestEngineBuildFailsWhenLatestTranscriptCausalGroupExceedsBudget(t *testing
 		t.Fatalf("Transcript report = %+v, want no retained messages and two dropped messages", result.Report.Transcript)
 	}
 	if !reportHasReason(result.Report, agentcontext.ReasonTranscriptBudgetExceeded) ||
-		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) ||
-		!reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
-		t.Fatalf("ReasonCodes = %v, want transcript and required section budget reasons", result.Report.ReasonCodes)
+		!reportHasReason(result.Report, agentcontext.ReasonRequiredContextOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want transcript and required context budget reasons", result.Report.ReasonCodes)
+	}
+	if reportHasReason(result.Report, agentcontext.ReasonRequiredSectionOverBudget) {
+		t.Fatalf("ReasonCodes = %v, want no required section reason for transcript budget", result.Report.ReasonCodes)
 	}
 }
 

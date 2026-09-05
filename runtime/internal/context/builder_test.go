@@ -1051,7 +1051,7 @@ func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
 				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 7, Minute: 10},
 			},
 		},
-	}, agentcontext.EngineConfig{MemoryContextSizeLimit: 72})
+	}, agentcontext.EngineConfig{MemoryContextSizeLimit: 256})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}

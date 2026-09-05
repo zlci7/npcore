@@ -925,6 +925,9 @@ func TestHandleEventDefaultStoreRetainsAtLeastRecentMemoryLimit(t *testing.T) {
 	config := agent.DefaultConfig()
 	config.RecentMemoryLimit = 25
 	config.MemoryContextSizeLimit = 65536
+	config.MaxRecentMemoryBytes = 65536
+	config.MaxRequestBytes = 262144
+	config.MaxUserMessageBytes = 262144
 	loop := agent.NewLoop(provider, recorder, config)
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}

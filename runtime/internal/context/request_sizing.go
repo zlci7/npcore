@@ -58,6 +58,9 @@ func RequestSizeExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) b
 	return false
 }
 
+// RequiredRequestSectionExceedsBudget is used after Engine has removed optional
+// projection content; a remaining system or user-message overflow means the
+// required request envelope still cannot fit the configured hard gate.
 func RequiredRequestSectionExceedsBudget(summary RequestSizeSummary, budget BudgetConfig) bool {
 	if budget.MaxSystemBytes > 0 && summary.SystemBytes > budget.MaxSystemBytes {
 		return true

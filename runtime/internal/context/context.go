@@ -84,7 +84,6 @@ type SectionReport struct {
 	Included   bool
 	ProxyBytes int
 	Cropped    bool
-	Dropped    bool
 	Reason     string
 }
 
@@ -280,7 +279,6 @@ func (e Engine) Build(input BuildInput) (BuildResult, error) {
 		if errors.Is(err, ErrBudgetExceeded) {
 			report.addReason(ReasonTranscriptBudgetExceeded)
 			report.addReason(ReasonRequiredContextOverBudget)
-			report.addReason(ReasonRequiredSectionOverBudget)
 		}
 		return BuildResult{Report: report}, err
 	}
@@ -365,7 +363,6 @@ func applyProjectionBudgets(projection ContextProjection, budget BudgetConfig, r
 	if definitionErr != nil {
 		report.addReason(ReasonDefinitionBudgetExceeded)
 		report.addReason(ReasonRequiredContextOverBudget)
-		report.addReason(ReasonRequiredSectionOverBudget)
 		err = definitionErr
 	}
 	if budget.MaxEventBytes > 0 && sectionProxyBytes(projection.CurrentEvent) > budget.MaxEventBytes {
@@ -728,11 +725,11 @@ func appendAgentDefinitionItems(
 	items []string,
 	appendItem func(*definition.AgentDefinition, string),
 ) bool {
-	for index, item := range items {
+	for _, item := range items {
 		if !tryUpdateAgentDefinition(agent, game, limit, func(candidate *definition.AgentDefinition) {
 			appendItem(candidate, item)
 		}) {
-			return index < len(items)
+			return true
 		}
 	}
 	return false
@@ -745,11 +742,11 @@ func appendGameDefinitionItems(
 	items []string,
 	appendItem func(*definition.GameDefinition, string),
 ) bool {
-	for index, item := range items {
+	for _, item := range items {
 		if !tryUpdateGameDefinition(agent, game, limit, func(candidate *definition.GameDefinition) {
 			appendItem(candidate, item)
 		}) {
-			return index < len(items)
+			return true
 		}
 	}
 	return false
