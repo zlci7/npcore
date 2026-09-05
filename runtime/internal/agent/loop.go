@@ -622,6 +622,9 @@ func (l *Loop) buildModelRequest(
 	size := agentcontext.MeasureRequest(req)
 	report = report.WithFinalRequestSize(size)
 	if agentcontext.RequestSizeExceedsBudget(size, report.EffectiveBudget) {
+		// Engine should already fit successful projections to the request
+		// budget. Keep this renderer-side hard gate as the final defense if
+		// request formatting, tools, or controls change later.
 		report = report.WithReason(agentcontext.ReasonRequiredContextOverBudget)
 		if agentcontext.RequiredRequestSectionExceedsBudget(size, report.EffectiveBudget) {
 			report = report.WithReason(agentcontext.ReasonRequiredSectionOverBudget)

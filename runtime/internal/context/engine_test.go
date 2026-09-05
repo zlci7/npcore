@@ -1035,6 +1035,110 @@ func TestEngineBuildGloballyTrimsOptionalContextToFitRequestBudget(t *testing.T)
 	}
 }
 
+func TestEngineBuildTrimsOlderTranscriptBeforeRecentMemoryUnderGlobalBudget(t *testing.T) {
+	input := validEngineInput(t)
+	input.RecentMemories = []memory.Record{{
+		MemoryID: "memory-keep",
+		SourceContextFacts: []memory.SourceContextFact{{
+			Kind:          "utterance",
+			ActorEntityID: "player:local",
+			Text:          strings.Repeat("memory-keep", 40),
+		}},
+	}}
+	input.Transcript = []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_old",
+				Name:      "inspect",
+				Arguments: map[string]any{"query": strings.Repeat("old-transcript", 40)},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_old",
+				Name:       "inspect",
+				Status:     "succeeded",
+				Code:       "action_succeeded",
+				Output:     map[string]any{"result": strings.Repeat("old-output", 40)},
+			}},
+		},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_latest",
+				Name:      "inspect",
+				Arguments: map[string]any{"query": "latest"},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResults: []model.ToolResult{{
+				ToolCallID: "call_latest",
+				Name:       "inspect",
+				Status:     "succeeded",
+				Code:       "action_succeeded",
+				Output:     map[string]any{"result": "ok"},
+			}},
+		},
+	}
+
+	baseline, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestBytes:          262144,
+		MaxUserMessageBytes:      262144,
+		MaxRecentMemoryBytes:     262144,
+		MaxTranscriptBytes:       262144,
+		MaxToolResultOutputBytes: 262144,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("baseline Build returned error: %v", err)
+	}
+	fullSize := measureProjectionForTest(t, baseline.Projection)
+
+	withoutOldTranscript := baseline.Projection
+	withoutOldTranscript.CurrentTurnTranscript = baseline.Projection.CurrentTurnTranscript[2:]
+	afterTranscriptTrim := measureProjectionForTest(t, withoutOldTranscript)
+
+	withoutMemory := baseline.Projection
+	withoutMemory.RecentMemory = nil
+	afterMemoryDrop := measureProjectionForTest(t, withoutMemory)
+
+	budget := maxInt(afterTranscriptTrim.TotalBytes, afterMemoryDrop.TotalBytes)
+	if budget >= fullSize.TotalBytes {
+		t.Fatalf("test setup did not create budget pressure: full=%+v after_transcript=%+v after_memory=%+v", fullSize, afterTranscriptTrim, afterMemoryDrop)
+	}
+
+	result, err := agentcontext.NewEngine(agentcontext.BudgetConfig{
+		MaxRequestBytes:          budget,
+		MaxUserMessageBytes:      262144,
+		MaxRecentMemoryBytes:     262144,
+		MaxTranscriptBytes:       262144,
+		MaxToolResultOutputBytes: 262144,
+	}).Build(input)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if got, want := len(result.Projection.RecentMemory), 1; got != want {
+		t.Fatalf("RecentMemory length = %d, want %d", got, want)
+	}
+	if result.Projection.RecentMemory[0].MemoryID != "memory-keep" {
+		t.Fatalf("retained memory = %q, want memory-keep", result.Projection.RecentMemory[0].MemoryID)
+	}
+	if got, want := len(result.Projection.CurrentTurnTranscript), 2; got != want {
+		t.Fatalf("CurrentTurnTranscript length = %d, want latest causal group", got)
+	}
+	if result.Projection.CurrentTurnTranscript[0].ToolCalls[0].ID != "call_latest" {
+		t.Fatalf("retained transcript = %+v, want latest group", result.Projection.CurrentTurnTranscript)
+	}
+	if !reportHasReason(result.Report, agentcontext.ReasonTranscriptBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want transcript budget reason", result.Report.ReasonCodes)
+	}
+	if reportHasReason(result.Report, agentcontext.ReasonMemoryBudgetExceeded) {
+		t.Fatalf("ReasonCodes = %v, want no memory budget reason", result.Report.ReasonCodes)
+	}
+}
+
 func TestEngineBuildFailsWhenDefinitionRequiredMinimumExceedsBudget(t *testing.T) {
 	engine := agentcontext.NewEngine(agentcontext.BudgetConfig{MaxDefinitionBytes: 1})
 	input := validEngineInput(t)
@@ -1482,6 +1586,23 @@ func renderRequestText(req model.Request) string {
 		parts = append(parts, message.Content)
 	}
 	return strings.Join(parts, "\n")
+}
+
+func measureProjectionForTest(t *testing.T, projection agentcontext.ContextProjection) agentcontext.RequestSizeSummary {
+	t.Helper()
+
+	req, err := agentcontext.NewRenderer().Render(projection)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	return agentcontext.MeasureRequest(req)
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func reportHasReason(report agentcontext.ContextBuildReport, reason string) bool {

@@ -233,6 +233,8 @@ Request size
     它是 MaxSystemBytes、MaxUserMessageBytes、MaxRequestBytes 的权威检查。
 ```
 
+Section budget 使用 `Projection proxy size` 做确定性预预算；全局 `MaxRequestBytes / MaxSystemBytes / MaxUserMessageBytes` 裁剪循环使用 `Renderer.Render` 后的 `Request size` 做 fit 判定。Engine 复用真实 Renderer 计算 request 尺寸，不维护第二套文本格式估算。`buildModelRequest` 保留同一口径的最终 hard gate，作为 request 发出前的最后防线。
+
 `RequestSizingHelper` 对最终 `model.Request` 使用 provider-neutral byte sizing 约定，不等同于 Provider tokenizer。最终 `model.Request` 超过任一 hard limit 时，`buildModelRequest` 返回 `ContextBuildReport + error`，`runBoundedSteps` 不调用 Provider、不提交 Action。
 
 `ContextBuildReport` 记录稳定的 projection proxy size summary。最终 `model.Request` size summary 在 `Renderer.Render` 后由 `buildModelRequest` 使用 `RequestSizingHelper` 补齐。`RequestSizingHelper` 对已渲染的 `Messages[].Content` 按 UTF-8 byte length 计数，对 `Tools` / `Controls` 等结构化字段使用 provider-neutral canonical compact JSON。Renderer 输出变长时 request size 应随之变大，并触发 hard gate，而不是静默漂移。
@@ -337,6 +339,8 @@ Optional 内容保留顺序固定为：
 7. Current Turn Transcript 的更旧完整因果组，从新到旧保留
 ```
 
+预算不足时按保留顺序的反向裁剪 optional 内容；因此 Current Turn Transcript 的更旧完整因果组先于 Recent Memory 被裁剪。
+
 结构化对象的遍历顺序固定为：
 
 ```text
@@ -431,6 +435,8 @@ SourceContextFacts 先于 Tool outcomes
 优先保留更新的 memory
 被丢弃数量写入 ContextBuildReport
 ```
+
+`MaxRecentMemoryBytes` 使用 Recent Memory projection 的 compact JSON proxy bytes 计量，与 `ContextBuildReport.Sections["recent_memory"].ProxyBytes` 口径一致。Recent Memory 是 optional context；若最新一条 memory projection 单独超过预算，本次 build 可以丢弃全部 Recent Memory，而不是发送超预算上下文。
 
 本阶段不引入语义检索或向量相似度排序。
 
@@ -547,14 +553,14 @@ Scheduler lookup
 
 Tool size admission 发生在最终 `TurnToolView` 捕获前。捕获后只能读取最终视图并记录诊断，不能继续裁剪工具。最终效果必须是模型可见工具与 Scheduler 可执行工具来自同一份最终视图。
 
-`Engine.Build` 不再剔除工具。它把 Final TurnToolView 当作固定成本：
+`Engine.Build` 不再剔除工具。它把 Final TurnToolView 当作固定成本，并用真实 `Request size` 驱动全局 optional context 裁剪：
 
 ```text
-可用于其他 Context 的预算
-    =
-MaxRequestBytes
-    -
-(tool proxy bytes + required minimum bytes)
+Renderer.Render(ContextProjection)
+    ->
+RequestSizingHelper
+    ->
+按固定保留顺序裁剪 optional projection
 ```
 
 如果 Final TurnToolView 加上所有 required minimum 已超过 `MaxRequestBytes`，本次 build 失败并记录 `required_context_over_budget` / `required_section_over_budget`，不能在某个 AgentStep 临时修改工具视图。

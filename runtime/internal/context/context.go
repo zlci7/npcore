@@ -451,14 +451,14 @@ func enforceGlobalRequestBudget(projection ContextProjection, budget BudgetConfi
 
 	for !projectionFitsRequestBudget(projection, budget) {
 		switch {
+		case trimTranscriptToLatestGroup(&projection, &report):
+			report.addReason(ReasonTranscriptBudgetExceeded)
+			sectionCropped["current_turn_transcript"] = ReasonTranscriptBudgetExceeded
 		case dropOldestRecentMemory(&projection):
 			report.RecentMemory.RetainedCount = len(projection.RecentMemory)
 			report.RecentMemory.DroppedCount++
 			report.addReason(ReasonMemoryBudgetExceeded)
 			sectionCropped["recent_memory"] = ReasonMemoryBudgetExceeded
-		case trimTranscriptToLatestGroup(&projection, &report):
-			report.addReason(ReasonTranscriptBudgetExceeded)
-			sectionCropped["current_turn_transcript"] = ReasonTranscriptBudgetExceeded
 		case dropContextFactOptionalFields(&projection):
 			report.addReason(ReasonContextFactsBudgetExceeded)
 			sectionCropped["current_event_context_facts"] = ReasonContextFactsBudgetExceeded
